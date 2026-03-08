@@ -103,14 +103,36 @@ function InstallBanner({ onDismiss }) {
               : <><span style={{ fontSize:20 }}>📲</span> Install Now — It's Free</>
             }
           </button>
-        ) : (
-          <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px', marginBottom:14 }}>
-            <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Install on your device:</div>
-            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-              <div style={{ fontSize:12, color:'#94a3b8' }}>📱 <strong style={{ color:'#e2e8f0' }}>Android:</strong> Tap ⋮ menu → "Add to Home screen"</div>
-              <div style={{ fontSize:12, color:'#94a3b8' }}>🖥 <strong style={{ color:'#e2e8f0' }}>Desktop Chrome:</strong> Click the install icon in the address bar ↗</div>
-              <div style={{ fontSize:12, color:'#94a3b8' }}>🍎 <strong style={{ color:'#e2e8f0' }}>iPhone:</strong> Tap Share ↑ → "Add to Home Screen"</div>
+       ) : (
+          <div style={{ marginBottom:14 }}>
+            <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px' }}>
+              <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:12 }}>Install on your device:</div>
+              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                <div style={{ fontSize:12, color:'#94a3b8' }}>
+                  🖥 <strong style={{ color:'#e2e8f0' }}>Desktop Chrome/Edge:</strong> Click the <strong style={{ color:'#f59e0b' }}>⊕ icon</strong> in the address bar (right side)
+                </div>
+                <div style={{ fontSize:12, color:'#94a3b8' }}>
+                  📱 <strong style={{ color:'#e2e8f0' }}>Android Chrome:</strong> Tap <strong style={{ color:'#f59e0b' }}>⋮ menu</strong> → "Add to Home screen"
+                </div>
+                <div style={{ fontSize:12, color:'#94a3b8' }}>
+                  🍎 <strong style={{ color:'#e2e8f0' }}>iPhone Safari:</strong> Tap <strong style={{ color:'#f59e0b' }}>Share ↑</strong> → "Add to Home Screen"
+                </div>
+              </div>
             </div>
+            <button
+              className="pwa-btn pwa-btn-primary"
+              style={{ marginTop:12 }}
+              onClick={() => {
+                // Try to trigger install via address bar on desktop
+                window.dispatchEvent(new Event('beforeinstallprompt'));
+                // Show Chrome install instructions
+                alert('Look for the ⊕ install icon in your browser address bar on the right side, then click "Install".');
+              }}
+            >
+              <span style={{ fontSize:18 }}>📲</span> How to Install
+            </button>
+          </div>
+        )}
           </div>
         )}
 
