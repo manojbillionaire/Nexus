@@ -4,8 +4,8 @@ const S = `
   @keyframes slideUp{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:translateY(0)}}
   @keyframes pulse3{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .pwa-overlay{position:fixed;inset:0;background:rgba(2,6,23,.85);backdrop-filter:blur(8px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
-  .pwa-sheet{background:linear-gradient(180deg,#0d1526 0%,#070b14 100%);border-radius:28px;padding:28px 24px 32px;width:100%;max-width:480px;animation:slideUp .35s cubic-bezier(.34,1.56,.64,1) forwards;border:1px solid rgba(255,255,255,.06)}
+  .pwa-overlay{position:fixed;inset:0;background:rgba(2,6,23,.85);backdrop-filter:blur(8px);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0 0 env(safe-area-inset-bottom,16px) 0}
+  .pwa-sheet{background:linear-gradient(180deg,#0d1526 0%,#070b14 100%);border-radius:28px 28px 0 0;padding:28px 24px 32px;width:100%;max-width:520px;animation:slideUp .35s cubic-bezier(.34,1.56,.64,1) forwards;border:1px solid rgba(255,255,255,.06);border-bottom:none}
   .pwa-btn{width:100%;padding:15px;border:none;border-radius:16px;font-size:14px;font-weight:900;cursor:pointer;letter-spacing:0.04em;transition:all .18s;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:10px}
   .pwa-btn-primary{background:linear-gradient(135deg,#f59e0b,#d97706);color:#000}
   .pwa-btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 36px rgba(245,158,11,.4)}
@@ -23,13 +23,13 @@ function InstallBanner({ onDismiss }) {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [installing, setInstalling] = useState(false);
   const [installed, setInstalled] = useState(false);
-  const [platform, setPlatform] = useState('other'); // 'ios' | 'android' | 'desktop' | 'other'
+  const [isIOS, setIsIOS] = useState(false);
+  const [isAndroid, setIsAndroid] = useState(false);
 
   useEffect(() => {
     const ua = navigator.userAgent;
-    if (/iPhone|iPad|iPod/.test(ua) && !window.MSStream) setPlatform('ios');
-    else if (/Android/.test(ua)) setPlatform('android');
-    else setPlatform('desktop');
+    setIsIOS(/iPhone|iPad|iPod/.test(ua) && !window.MSStream);
+    setIsAndroid(/Android/.test(ua));
 
     const handler = (e) => { e.preventDefault(); setDeferredPrompt(e); };
     window.addEventListener('beforeinstallprompt', handler);
@@ -38,13 +38,12 @@ function InstallBanner({ onDismiss }) {
   }, []);
 
   const handleInstall = async () => {
-    if (deferredPrompt) {
-      setInstalling(true);
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      setInstalling(false);
-      if (outcome === 'accepted') { setInstalled(true); setTimeout(onDismiss, 1800); }
-    }
+    if (!deferredPrompt) return;
+    setInstalling(true);
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    setInstalling(false);
+    if (outcome === 'accepted') { setInstalled(true); setTimeout(onDismiss, 1800); }
   };
 
   if (installed) return (
@@ -54,43 +53,6 @@ function InstallBanner({ onDismiss }) {
         <div style={{ fontSize:20, fontWeight:900, color:'#10b981', marginBottom:6 }}>App Installed!</div>
         <div style={{ fontSize:13, color:'#475569' }}>Nexus Justice is now on your home screen.</div>
       </div>
-    </div>
-  );
-
-  // iOS — always show step by step
-  const iosInstructions = (
-    <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px', marginBottom:14 }}>
-      <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:10 }}>Install on iPhone / iPad:</div>
-      {[['1','Tap','Share button ↑ (bottom of Safari)'],['2','Scroll and tap','Add to Home Screen'],['3','Tap','Add — done!']].map(([n,a,b]) => (
-        <div key={n} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
-          <div style={{ width:24, height:24, borderRadius:'50%', background:'rgba(99,102,241,.2)', color:'#818cf8', fontSize:11, fontWeight:900, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{n}</div>
-          <div style={{ fontSize:12, color:'#94a3b8' }}>{a} <strong style={{ color:'#e2e8f0' }}>{b}</strong></div>
-        </div>
-      ))}
-    </div>
-  );
-
-  // Android/Desktop — show Install Now button if prompt available, else instructions
-  const installButton = deferredPrompt ? (
-    <button className="pwa-btn pwa-btn-primary" onClick={handleInstall} disabled={installing} style={{ marginBottom:0 }}>
-      {installing
-        ? <><span style={{ width:18, height:18, border:'2px solid rgba(0,0,0,.3)', borderTopColor:'#000', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} /> Installing…</>
-        : <><span style={{ fontSize:20 }}>📲</span> Install Now — It's Free</>
-      }
-    </button>
-  ) : (
-    <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px', marginBottom:2 }}>
-      <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:10 }}>
-        {platform === 'android' ? 'Install on Android:' : 'Install on Desktop:'}
-      </div>
-      {platform === 'android' ? (
-        <div style={{ fontSize:12, color:'#94a3b8' }}>Tap <strong style={{ color:'#f59e0b' }}>⋮ menu</strong> (top right) → <strong style={{ color:'#e2e8f0' }}>"Add to Home screen"</strong> → tap <strong style={{ color:'#e2e8f0' }}>Add</strong></div>
-      ) : (
-        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          <div style={{ fontSize:12, color:'#94a3b8' }}>Look for <strong style={{ color:'#f59e0b' }}>⊕</strong> icon in the address bar (right side) → click <strong style={{ color:'#e2e8f0' }}>"Install"</strong></div>
-          <div style={{ fontSize:11, color:'#475569' }}>Or go to browser menu → <strong style={{ color:'#94a3b8' }}>"Save and share"</strong> → <strong style={{ color:'#94a3b8' }}>"Install page as app"</strong></div>
-        </div>
-      )}
     </div>
   );
 
@@ -117,36 +79,38 @@ function InstallBanner({ onDismiss }) {
           ))}
         </div>
 
-        {/* Platform-specific install UI */}
-        {platform === 'ios' ? iosInstructions : installButton}
-
-        <button onClick={onDismiss} style={{ width:'100%', marginTop:12, padding:'10px', background:'none', border:'none', color:'#334155', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
-          Skip for now
-        </button>
-      </div>
-    </div>
-  );
-}
+        {/* Install button OR iOS instructions */}
+        {isIOS ? (
+          <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px', marginBottom:14 }}>
+            <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:10 }}>To install on iPhone/iPad:</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {[
+                ['1','Tap the Share button','↑ at the bottom of Safari'],
+                ['2','Scroll and tap','Add to Home Screen'],
+                ['3','Tap','Add — done!']
+              ].map(([n, a, b]) => (
+                <div key={n} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <div style={{ width:24, height:24, borderRadius:'50%', background:'rgba(99,102,241,.2)', color:'#818cf8', fontSize:11, fontWeight:900, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{n}</div>
+                  <div style={{ fontSize:12, color:'#94a3b8' }}>{a} <strong style={{ color:'#e2e8f0' }}>{b}</strong></div>
+                </div>
+              ))}
             </div>
-            <button
-              className="pwa-btn pwa-btn-primary"
-              style={{ marginTop:12 }}
-              onClick={() => {
-                // Try to trigger install via address bar on desktop
-                window.dispatchEvent(new Event('beforeinstallprompt'));
-                // Show Chrome install instructions
-                alert('Look for the ⊕ install icon in your browser address bar on the right side, then click "Install".');
-              }}
-            >
-              <span style={{ fontSize:18 }}>📲</span> How to Install
-            </button>
           </div>
-        )}
+        ) : deferredPrompt ? (
+          <button className="pwa-btn pwa-btn-primary" onClick={handleInstall} disabled={installing}>
+            {installing
+              ? <><span style={{ width:18, height:18, border:'2px solid rgba(0,0,0,.3)', borderTopColor:'#000', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} /> Installing…</>
+              : <><span style={{ fontSize:20 }}>📲</span> Install App — It's Free</>
+            }
+          </button>
+        ) : (
+          <div style={{ background:'rgba(255,255,255,.03)', borderRadius:14, padding:'14px 16px', marginBottom:14, fontSize:12, color:'#475569', textAlign:'center' }}>
+            {isAndroid ? 'Tap the ⋮ menu → "Add to Home screen"' : 'Open in Chrome/Edge on your device for the best install experience.'}
           </div>
         )}
 
-        <button onClick={onDismiss} style={{ width:'100%', marginTop:10, padding:'10px', background:'none', border:'none', color:'#334155', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
-          Skip for now
+        <button className="pwa-btn pwa-btn-secondary" style={{ border:'1px solid rgba(255,255,255,.1)' }} onClick={onDismiss}>
+          Maybe Later
         </button>
       </div>
     </div>
