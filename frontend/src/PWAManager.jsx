@@ -4,8 +4,8 @@ const S = `
   @keyframes slideUp{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:translateY(0)}}
   @keyframes pulse3{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .pwa-overlay{position:fixed;inset:0;background:rgba(2,6,23,.85);backdrop-filter:blur(8px);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0 0 env(safe-area-inset-bottom,16px) 0}
-  .pwa-sheet{background:linear-gradient(180deg,#0d1526 0%,#070b14 100%);border-radius:28px 28px 0 0;padding:28px 24px 32px;width:100%;max-width:520px;animation:slideUp .35s cubic-bezier(.34,1.56,.64,1) forwards;border:1px solid rgba(255,255,255,.06);border-bottom:none}
+  .pwa-overlay{position:fixed;inset:0;background:rgba(2,6,23,.85);backdrop-filter:blur(8px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
+  .pwa-sheet{background:linear-gradient(180deg,#0d1526 0%,#070b14 100%);border-radius:28px;padding:28px 24px 32px;width:100%;max-width:480px;animation:slideUp .35s cubic-bezier(.34,1.56,.64,1) forwards;border:1px solid rgba(255,255,255,.06)}
   .pwa-btn{width:100%;padding:15px;border:none;border-radius:16px;font-size:14px;font-weight:900;cursor:pointer;letter-spacing:0.04em;transition:all .18s;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:10px}
   .pwa-btn-primary{background:linear-gradient(135deg,#f59e0b,#d97706);color:#000}
   .pwa-btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 36px rgba(245,158,11,.4)}
@@ -100,7 +100,7 @@ function InstallBanner({ onDismiss }) {
           <button className="pwa-btn pwa-btn-primary" onClick={handleInstall} disabled={installing}>
             {installing
               ? <><span style={{ width:18, height:18, border:'2px solid rgba(0,0,0,.3)', borderTopColor:'#000', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} /> Installing…</>
-              : <><span style={{ fontSize:20 }}>📲</span> Install App — It's Free</>
+              : <><span style={{ fontSize:20 }}>📲</span> Install Now — It's Free</>
             }
           </button>
         ) : (
@@ -109,8 +109,8 @@ function InstallBanner({ onDismiss }) {
           </div>
         )}
 
-        <button className="pwa-btn pwa-btn-secondary" style={{ border:'1px solid rgba(255,255,255,.1)' }} onClick={onDismiss}>
-          Maybe Later
+        <button onClick={onDismiss} style={{ width:'100%', marginTop:10, padding:'10px', background:'none', border:'none', color:'#334155', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+          Skip for now
         </button>
       </div>
     </div>
