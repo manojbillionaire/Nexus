@@ -79,7 +79,7 @@ function InstallBanner({ onDismiss }) {
           ))}
         </div>
 
-        {/* Install button OR iOS instructions */}
+       {/* Install button — iOS / Android native prompt / Desktop Chrome */}
         {isIOS ? (
           <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px', marginBottom:14 }}>
             <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:10 }}>To install on iPhone/iPad:</div>
@@ -104,8 +104,13 @@ function InstallBanner({ onDismiss }) {
             }
           </button>
         ) : (
-          <div style={{ background:'rgba(255,255,255,.03)', borderRadius:14, padding:'14px 16px', marginBottom:14, fontSize:12, color:'#475569', textAlign:'center' }}>
-            {isAndroid ? 'Tap the ⋮ menu → "Add to Home screen"' : 'Open in Chrome/Edge on your device for the best install experience.'}
+          <div style={{ background:'rgba(99,102,241,.07)', border:'1px solid rgba(99,102,241,.15)', borderRadius:16, padding:'16px 18px', marginBottom:14 }}>
+            <div style={{ fontSize:10, color:'#818cf8', fontWeight:900, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Install on your device:</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              <div style={{ fontSize:12, color:'#94a3b8' }}>📱 <strong style={{ color:'#e2e8f0' }}>Android:</strong> Tap ⋮ menu → "Add to Home screen"</div>
+              <div style={{ fontSize:12, color:'#94a3b8' }}>🖥 <strong style={{ color:'#e2e8f0' }}>Desktop Chrome:</strong> Click the install icon in the address bar ↗</div>
+              <div style={{ fontSize:12, color:'#94a3b8' }}>🍎 <strong style={{ color:'#e2e8f0' }}>iPhone:</strong> Tap Share ↑ → "Add to Home Screen"</div>
+            </div>
           </div>
         )}
 
