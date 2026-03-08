@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nexus-justice-v3.6';
+const CACHE_NAME = 'nexus-justice-v3.4';
 
 const STATIC_ASSETS = [
   '/',
