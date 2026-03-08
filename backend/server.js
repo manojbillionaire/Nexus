@@ -20,7 +20,7 @@ mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 })
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 const AdvocateSchema = new mongoose.Schema({
   name: String, email: { type: String, unique: true }, phone: String,
-  password: String, barCouncilNo: String, specialisation: String,
+  password: String, state: String, district: String, courtName: String,
   plan: { type: String, default: 'Starter' },
   affiliateCode: String,
   status: { type: String, default: 'pending_approval' },
@@ -29,7 +29,13 @@ const AdvocateSchema = new mongoose.Schema({
   activeCases: { type: Number, default: 0 },
   monthlyRevenue: { type: Number, default: 0 },
   affiliateLink: String,
-  notifications: [{ message: String, type: String, read: Boolean, createdAt: Date, link: String }],
+  notifications: [{
+    message: { type: String },
+    type:    { type: String },
+    read:    { type: Boolean, default: false },
+    createdAt: { type: Date, default: Date.now },
+    link:    { type: String },
+  }],
 });
 
 const AffiliateSchema = new mongoose.Schema({
@@ -219,9 +225,9 @@ app.post('/api/auth/signup', async (req, res) => {
       specialisation, affiliateCode,
       affiliateCode: myAffCode,
       affiliateLink: myAffLink,
-      status: 'pending_approval',
+      status:  'active',
       notifications: [
-        { message: `Welcome ${name}! Your application is under review by Agency HQ.`, type: 'general', read: false, createdAt: new Date() },
+        { message:  `Welcome ${name}! Your Nexus Justice account is active. You can sign in now.`, type: 'general', read: false, createdAt: new Date() }, 
         { message: `Your affiliate link is ready: ${myAffLink} — Paste it on social media to earn commissions!`, type: 'affiliate', read: false, createdAt: new Date(), link: myAffLink },
         { message: `Check your commission here → Affiliate Portal`, type: 'affiliate_portal', read: false, createdAt: new Date() },
       ],
@@ -237,9 +243,9 @@ app.post('/api/auth/signup', async (req, res) => {
     }
 
     // Notify Agency HQ (broadcast)
-    await Broadcast.create({ message: `New advocate signup: ${name} (${email}) — pending approval.`, tier: 'admin', sentBy: 'system' });
+    await Broadcast.create({ message: `New advocate signup: ${name} (${email}) — account activated.`, tier: 'admin', sentBy: 'system' });
 
-    res.json({ ok: true, user: { id: advocate._id, name, email, status: 'pending_approval' } });
+    res.json({ ok: true, user: { id: advocate._id, name, email, status: 'active' } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
