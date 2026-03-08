@@ -1,88 +1,64 @@
-const CACHE_VERSION = 'nexus-justice-v3.3';
-const STATIC_CACHE  = 'nexus-static-v3.3';
-const API_CACHE     = 'nexus-api-v3.3';
+const CACHE_NAME = 'nexus-justice-v3.6';
 
 const STATIC_ASSETS = [
-  '/', '/index.html', '/manifest.json',
-  '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png',
-  '/icon-72.png', '/icon-96.png', '/icon-144.png', '/icon-180.png'
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
 ];
 
-// ─── Install: pre-cache shell ─────────────────────────────────────────────────
+// Install
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(STATIC_CACHE)
-      .then(c => c.addAll(STATIC_ASSETS))
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(STATIC_ASSETS))
       .then(() => self.skipWaiting())
   );
 });
 
-// ─── Activate: clean old caches ───────────────────────────────────────────────
+// Activate - clear old caches
 self.addEventListener('activate', e => {
-  const keep = [STATIC_CACHE, API_CACHE];
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => !keep.includes(k)).map(k => caches.delete(k))))
+      .then(keys => Promise.all(
+        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+      ))
       .then(() => self.clients.claim())
   );
 });
 
-// ─── Fetch strategy ───────────────────────────────────────────────────────────
+// Fetch - simple strategy, no cloning issues
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // Skip: non-GET, cross-origin, devtools, chrome-extension
-  if (e.request.method !== 'GET') return;
-  if (url.origin !== self.location.origin && !url.hostname.includes('fonts.googleapis')) return;
-
-  // API calls: network only (never cache auth/AI responses)
+  // Never intercept API calls
   if (url.pathname.startsWith('/api/')) return;
 
-  // Google Fonts: stale-while-revalidate
-  if (url.hostname.includes('fonts.googleapis') || url.hostname.includes('fonts.gstatic')) {
+  // Never intercept non-GET
+  if (e.request.method !== 'GET') return;
+
+  // Network first for JS/CSS assets (always fresh)
+  if (url.pathname.startsWith('/assets/')) {
     e.respondWith(
-      caches.open(STATIC_CACHE).then(cache =>
-        cache.match(e.request).then(cached => {
-          const fetchPromise = fetch(e.request).then(res => { cache.put(e.request, res.clone()); return res; });
-          return cached || fetchPromise;
-        })
-      )
+      fetch(e.request).catch(() => caches.match(e.request))
     );
     return;
   }
 
-  // App shell + static assets: cache-first, fallback to network
+  // Cache first for static assets
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;
       return fetch(e.request)
-        .then(res => {
-          if (res.ok) {
-            caches.open(STATIC_CACHE).then(c => c.put(e.request, res.clone()));
+        .then(response => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
           }
-          return res;
+          return response;
         })
-        .catch(() => caches.match('/index.html')); // offline fallback to app shell
+        .catch(() => caches.match('/index.html'));
     })
   );
-});
-
-// ─── Push notifications (future-ready) ───────────────────────────────────────
-self.addEventListener('push', e => {
-  if (!e.data) return;
-  const data = e.data.json();
-  e.waitUntil(
-    self.registration.showNotification(data.title || 'Nexus Justice', {
-      body: data.body || '',
-      icon: '/icon-192.png',
-      badge: '/icon-96.png',
-      tag: data.tag || 'nexus-notification',
-      data: { url: data.url || '/' }
-    })
-  );
-});
-
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  e.waitUntil(clients.openWindow(e.notification.data.url || '/'));
 });
