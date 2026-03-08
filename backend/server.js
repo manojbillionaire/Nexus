@@ -468,8 +468,8 @@ app.post('/api/sarvam/tts', authMiddleware, async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.1', timestamp: new Date().toISOString() }));
 
 // ─── Serve React Frontend ─────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/dist/index.html')));
+app.use(express.static(path.join(__dirname, 'frontend/dist')));
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'frontend/dist/index.html')));
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
