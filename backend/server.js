@@ -480,7 +480,7 @@ app.get('*', (req, res) => {
   const indexFile = path.join(DIST, 'index.html');
   require('fs').access(indexFile, (err) => {
     if (err) {
-      console.error('❌ index.html not found at:', indexFile);
+      console.error('ERROR: index.html not found at:', indexFile);
       return res.status(500).send('Frontend not built. index.html missing.');
     }
     res.sendFile(indexFile);
