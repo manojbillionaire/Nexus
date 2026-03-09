@@ -483,14 +483,14 @@ app.get('*', (req, res) => {
       console.error('ERROR: index.html not found at:', indexFile);
       return res.status(500).send('Frontend not built. index.html missing.');
     }
-    res.sendFile(indexFile);
+   res.sendFile(indexFile);
   });
+});
 
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ─── Start ───
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, async () => {
-  console.log(`🚀 Nexus Justice SaaS running on port ${PORT}`);
+  console.log(`Nexus Justice SaaS running on port ${PORT}`);
   await seedData();
 });
-}
