@@ -475,16 +475,10 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.1', ti
 
 // ─── Serve React Frontend ─────────────────────────────────────────────────────
 const DIST = path.join(__dirname, 'frontend/dist');
-app.use(express.static(DIST, { maxAge: '1d' }));
+app.use(express.static(DIST));
 app.get('*', (req, res) => {
-  // Only serve index.html for non-API, non-asset routes
-  if (req.path.startsWith('/api/') || req.path.match(/\.(js|css|png|jpg|ico|svg|woff|woff2)$/)) {
-    return res.status(404).send('Not found');
-  }
-  const indexFile = path.join(DIST, 'index.html');
-  res.sendFile(indexFile);
+  res.sendFile(path.join(DIST, 'index.html'));
 });
-
 // ─── Start ───
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, async () => {
