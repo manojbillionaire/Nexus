@@ -477,16 +477,13 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.1', ti
 const DIST = path.join(__dirname, 'frontend/dist');
 app.use(express.static(DIST, { maxAge: '1d' }));
 app.get('*', (req, res) => {
+  // Only serve index.html for non-API, non-asset routes
+  if (req.path.startsWith('/api/') || req.path.match(/\.(js|css|png|jpg|ico|svg|woff|woff2)$/)) {
+    return res.status(404).send('Not found');
+  }
   const indexFile = path.join(DIST, 'index.html');
-  require('fs').access(indexFile, (err) => {
-    if (err) {
-      console.error('ERROR: index.html not found at:', indexFile);
-      return res.status(500).send('Frontend not built. index.html missing.');
-    }
-   res.sendFile(indexFile);
-  });
+  res.sendFile(indexFile);
 });
-
 
 // ─── Start ───
 const PORT = process.env.PORT || 3001;
