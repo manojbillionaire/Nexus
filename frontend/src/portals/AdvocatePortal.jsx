@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import api from '../api.js';
 
 const Icon = ({ path, size = 20, strokeWidth = 2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
@@ -25,12 +26,6 @@ const NOTIFICATIONS = [
   { id: 2, message: "John Doe (555-0192) joined under you — congratulations!", date: "2026-02-27", read: false, type: 'payment' },
 ];
 
-const DEMO_AI_REPLIES = [
-  "Based on the consultation history, Section 6 of the Specific Relief Act, 1963 applies — recovery of possession of immovable property. I recommend filing an interim injunction under Order XXXIX Rules 1 & 2 of CPC to restrain further encroachment. Shall I draft the petition?",
-  "Under the Consumer Protection Act 2019, you may approach the District Consumer Disputes Redressal Commission for claims up to ₹1 crore. The process is straightforward — no lawyer is mandatory. Would you like guidance on documentation?",
-  "For IPR infringement, Section 51 of the Copyright Act or Section 29 of the Trade Marks Act, 1999 may apply. I recommend a Cease & Desist notice first, followed by a civil suit for injunction and damages. I can draft the notice now.",
-];
-let demoIdx = 0;
 
 const LAW_CATEGORIES = [
   { id: 'railway', label: 'Railway Law', color: '#f59e0b' },
@@ -322,10 +317,17 @@ export default function AdvocatePortal() {
   const sendConsult = async () => {
     if (!consoleInput.trim() || consoleLoading) return;
     const text = consoleInput.trim(); setConsoleInput('');
-    setChatHistory(h => [...h, { role: 'user', text, id: Date.now() }]);
+    const userMsg = { role: 'user', text, id: Date.now() };
+    setChatHistory(h => [...h, userMsg]);
     setConsoleLoading(true);
-    await new Promise(r => setTimeout(r, 1400));
-    setChatHistory(h => [...h, { role: 'ai', text: DEMO_AI_REPLIES[demoIdx++ % DEMO_AI_REPLIES.length], id: Date.now() }]);
+    try {
+      const history = chatHistory.map(m => ({ role: m.role, text: m.text }));
+      const res = await api.post('/api/ai/consult', { message: text, history });
+      setChatHistory(h => [...h, { role: 'ai', text: res.data.reply, id: Date.now() }]);
+    } catch (e) {
+      const errMsg = e.response?.data?.error || 'AI service unavailable. Please check your API keys in Railway environment variables.';
+      setChatHistory(h => [...h, { role: 'ai', text: errMsg, id: Date.now() }]);
+    }
     setConsoleLoading(false);
   };
 
