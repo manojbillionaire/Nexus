@@ -493,3 +493,4 @@ app.listen(PORT, async () => {
   console.log(`🚀 Nexus Justice SaaS running on port ${PORT}`);
   await seedData();
 });
+}
