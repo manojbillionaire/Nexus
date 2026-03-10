@@ -148,7 +148,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
   // 1️⃣ Sarvam first
   if (sarvamKey) {
     try {
-      const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
+      const res = await axios.post('https://api.sarvam.ai/v2/chat/completions', {
         model: 'sarvam-30b',
         messages,
         max_tokens: 1000,
