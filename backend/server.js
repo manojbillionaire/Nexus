@@ -132,25 +132,38 @@ async function seedData() {
 }
 
 // ─── AI Orchestration (DeepSeek primary, Gemini fallback) ─────────────────────
+// ─── AI Orchestration (Sarvam primary, DeepSeek/Gemini fallback) ──────────────
 async function callAI(prompt, systemPrompt = '', options = {}) {
-  const { useSearch = false, language = 'en' } = options;
+  const { language = 'en' } = options;
 
-  // Sanitize keys — remove ALL whitespace/newlines/invisible chars
+  const sarvamKey   = (process.env.SARVAM_API_KEY   || '').replace(/\s/g, '');
   const deepseekKey = (process.env.DEEPSEEK_API_KEY || '').replace(/\s/g, '');
-  const geminiKey = (process.env.GEMINI_API_KEY || '').replace(/\s/g, '');
+  const geminiKey   = (process.env.GEMINI_API_KEY   || '').replace(/\s/g, '');
 
-  console.log('DeepSeek key prefix:', deepseekKey.slice(0, 8));
-  console.log('Gemini key prefix:', geminiKey.slice(0, 8));
+  const messages = [
+    { role: 'system', content: systemPrompt || 'You are Nexus, a legal AI assistant for Indian advocates. Answer clearly and accurately.' },
+    { role: 'user',   content: prompt }
+  ];
 
-  // Try DeepSeek first
+  // 1️⃣ Sarvam first
+  if (sarvamKey) {
+    try {
+      const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
+        model: 'sarvam-m',
+        messages,
+        max_tokens: 1000,
+        temperature: 0.7,
+      }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 20000 });
+      return { text: res.data.choices[0].message.content, model: 'sarvam' };
+    } catch (e) { console.log('Sarvam LLM failed, trying DeepSeek:', e.message); }
+  }
+
+  // 2️⃣ DeepSeek fallback
   if (deepseekKey) {
     try {
       const res = await axios.post('https://api.deepseek.com/v1/chat/completions', {
         model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemPrompt || 'You are a legal AI assistant for Indian advocates.' },
-          { role: 'user', content: prompt }
-        ],
+        messages,
         max_tokens: 1000,
         temperature: 0.7,
       }, { headers: { Authorization: `Bearer ${deepseekKey}` }, timeout: 15000 });
@@ -158,7 +171,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
     } catch (e) { console.log('DeepSeek failed, trying Gemini:', e.message); }
   }
 
-  // Gemini fallback
+  // 3️⃣ Gemini fallback
   if (geminiKey) {
     try {
       const res = await axios.post(
