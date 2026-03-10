@@ -149,7 +149,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
   if (sarvamKey) {
     try {
       const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
-        model: 'sarvam-m',
+        model: 'sarvam-30b',
         messages,
         max_tokens: 1000,
         temperature: 0.7,
