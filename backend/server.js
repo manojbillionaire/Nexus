@@ -162,7 +162,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
   if (geminiKey) {
     try {
       const res = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
         { contents: [{ parts: [{ text: (systemPrompt ? systemPrompt + '\n\n' : '') + prompt }] }] },
         { timeout: 20000 }
       );
