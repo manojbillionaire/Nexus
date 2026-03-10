@@ -54,22 +54,23 @@ const BroadcastSchema = new mongoose.Schema({
   sentBy: String, sentAt: { type: Date, default: Date.now },
 });
 
-const Advocate = mongoose.model('Advocate', AdvocateSchema);
-const Affiliate = mongoose.model('Affiliate', AffiliateSchema);
-const Broadcast = mongoose.model('Broadcast', BroadcastSchema);
 // ─── Incoming Call Schema ─────────────────────────────────────────────────────
 const IncomingCallSchema = new mongoose.Schema({
-  advocateId:  { type: String, required: true },
-  caller:      { type: String, default: 'Unknown' },
+  advocateId:  { type: String, required: true },   // which advocate this call belongs to
+  caller:      { type: String, default: 'Unknown' }, // caller name or number
   phone:       { type: String, default: '' },
-  duration:    { type: String, default: '' },
-  summary:     { type: String, default: '' },
-  transcript:  { type: String, default: '' },
+  duration:    { type: String, default: '' },        // filled after call ends
+  summary:     { type: String, default: '' },        // AI summary (filled later)
+  transcript:  { type: String, default: '' },        // full transcript if provided
   status:      { type: String, default: 'incoming' }, // incoming | active | ended | missed
-  source:      { type: String, default: 'webhook' },
+  source:      { type: String, default: 'webhook' }, // webhook | manual
   receivedAt:  { type: Date, default: Date.now },
   endedAt:     { type: Date },
 });
+
+const Advocate = mongoose.model('Advocate', AdvocateSchema);
+const Affiliate = mongoose.model('Affiliate', AffiliateSchema);
+const Broadcast = mongoose.model('Broadcast', BroadcastSchema);
 const IncomingCall = mongoose.model('IncomingCall', IncomingCallSchema);
 
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
@@ -131,11 +132,11 @@ async function seedData() {
   } catch (e) { console.error('Seed error:', e.message); }
 }
 
-// ─── AI Orchestration (DeepSeek primary, Gemini fallback) ─────────────────────
 // ─── AI Orchestration (Sarvam primary, DeepSeek/Gemini fallback) ──────────────
 async function callAI(prompt, systemPrompt = '', options = {}) {
   const { language = 'en' } = options;
 
+  // Sanitize all keys
   const sarvamKey   = (process.env.SARVAM_API_KEY   || '').replace(/\s/g, '');
   const deepseekKey = (process.env.DEEPSEEK_API_KEY || '').replace(/\s/g, '');
   const geminiKey   = (process.env.GEMINI_API_KEY   || '').replace(/\s/g, '');
@@ -145,7 +146,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
     { role: 'user',   content: prompt }
   ];
 
-  // 1️⃣ Sarvam first
+  // 1️⃣ Sarvam first (already paid, Indian legal context aware)
   if (sarvamKey) {
     try {
       const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
@@ -505,8 +506,10 @@ app.post('/api/sarvam/tts', authMiddleware, async (req, res) => {
   if (!result.success) return res.json({ ok: false, error: result.error });
   res.json({ ok: true, audio: result.audio });
 });
-// ─── SSE: Real-time call push ─────────────────────────────────────────────────
-const sseClients = new Map();
+
+// ─── Health Check ─────────────────────────────────────────────────────────────
+// ─── SSE: Real-time call push to advocate dashboard ──────────────────────────
+const sseClients = new Map(); // advocateId → res
 
 app.get('/api/calls/stream', authMiddleware, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -516,6 +519,7 @@ app.get('/api/calls/stream', authMiddleware, (req, res) => {
   res.flushHeaders();
   const advocateId = req.user.id;
   sseClients.set(advocateId, res);
+  // Send heartbeat every 25s to keep connection alive
   const hb = setInterval(() => res.write(': heartbeat\n\n'), 25000);
   req.on('close', () => { clearInterval(hb); sseClients.delete(advocateId); });
 });
@@ -526,68 +530,95 @@ function pushCallEvent(advocateId, event, data) {
 }
 
 // ─── Webhook: Receive forwarded call (no auth — called by phone provider) ─────
+// POST /api/webhook/call?key=YOUR_WEBHOOK_SECRET
 app.post('/api/webhook/call', async (req, res) => {
   const secret = process.env.WEBHOOK_SECRET || 'nexus_webhook_2026';
   const provided = req.query.key || req.headers['x-webhook-key'] || req.body.webhookKey;
   if (provided !== secret) return res.status(401).json({ error: 'Invalid webhook key' });
+
   try {
-    const { advocateId, advocatePhone, caller = 'Unknown Caller', phone = '', status = 'incoming', duration = '', transcript = '' } = req.body;
+    const {
+      advocateId,          // Required: which advocate's dashboard to push to
+      advocatePhone,       // Alt: look up advocate by their phone number
+      caller    = 'Unknown Caller',
+      phone     = '',
+      status    = 'incoming',  // incoming | active | ended | missed
+      duration  = '',
+      transcript = '',
+    } = req.body;
+
+    // Resolve advocate
     let advId = advocateId;
     if (!advId && advocatePhone) {
       const adv = await Advocate.findOne({ phone: advocatePhone });
       if (adv) advId = String(adv._id);
     }
     if (!advId) return res.status(400).json({ error: 'advocateId or advocatePhone required' });
+
+    // If this is a new call, create a record; if update, find existing open call
     let call;
     if (status === 'incoming' || status === 'active') {
       call = await IncomingCall.create({ advocateId: advId, caller, phone, status, source: 'webhook' });
     } else {
+      // ended / missed — find most recent open call from this phone
       call = await IncomingCall.findOne({ advocateId: advId, phone, status: { $in: ['incoming', 'active'] } }).sort({ receivedAt: -1 });
       if (call) {
         call.status = status; call.duration = duration; call.endedAt = new Date();
         if (transcript) call.transcript = transcript;
+        // Auto-generate AI summary if transcript provided
         if (transcript && !call.summary) {
-          try { const ai = await callAI(`Summarise this call in 1-2 sentences for an advocate's log:\n\n${transcript.slice(0, 1500)}`); call.summary = ai.text; } catch {}
+          try {
+            const ai = await callAI(`Summarise this call transcript in 1-2 sentences for an advocate's call log. Focus on the caller's legal issue:\n\n${transcript.slice(0, 1500)}`);
+            call.summary = ai.text;
+          } catch {}
         }
         await call.save();
       } else {
+        // Create ended record anyway
         call = await IncomingCall.create({ advocateId: advId, caller, phone, status, duration, transcript, source: 'webhook', endedAt: new Date() });
       }
     }
+
+    // Push real-time event to advocate's browser via SSE
     pushCallEvent(advId, 'call', { ...call.toObject() });
+
     res.json({ ok: true, callId: call._id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ─── Routes: Calls ────────────────────────────────────────────────────────────
+// ─── Routes: Calls (authenticated) ───────────────────────────────────────────
+// GET /api/calls — list recent calls for this advocate
 app.get('/api/calls', authMiddleware, async (req, res) => {
   const calls = await IncomingCall.find({ advocateId: req.user.id }).sort({ receivedAt: -1 }).limit(50);
   res.json({ ok: true, calls });
 });
 
+// POST /api/calls — manually log a call
 app.post('/api/calls', authMiddleware, async (req, res) => {
   const { caller, phone, duration, summary, status = 'ended' } = req.body;
   const call = await IncomingCall.create({ advocateId: req.user.id, caller, phone, duration, summary, status, source: 'manual', endedAt: new Date() });
   res.json({ ok: true, call });
 });
 
+// POST /api/calls/:id/summarise — ask AI to summarise a call transcript
 app.post('/api/calls/:id/summarise', authMiddleware, async (req, res) => {
   const call = await IncomingCall.findOne({ _id: req.params.id, advocateId: req.user.id });
   if (!call) return res.status(404).json({ error: 'Call not found' });
   const { transcript } = req.body;
   if (transcript) call.transcript = transcript;
-  if (!call.transcript) return res.status(400).json({ error: 'No transcript' });
-  const ai = await callAI(`Summarise this call transcript in 1-2 sentences:\n\n${call.transcript.slice(0, 2000)}`);
-  call.summary = ai.text; await call.save();
+  if (!call.transcript) return res.status(400).json({ error: 'No transcript to summarise' });
+  const ai = await callAI(`Summarise this client call transcript in 1-2 sentences for an advocate's call log. Focus on the legal issue raised:\n\n${call.transcript.slice(0, 2000)}`);
+  call.summary = ai.text;
+  await call.save();
   res.json({ ok: true, summary: call.summary, call });
 });
 
+// DELETE /api/calls/:id
 app.delete('/api/calls/:id', authMiddleware, async (req, res) => {
   await IncomingCall.deleteOne({ _id: req.params.id, advocateId: req.user.id });
   res.json({ ok: true });
 });
 
-// ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.1', timestamp: new Date().toISOString() }));
 
 // ─── Serve React Frontend ─────────────────────────────────────────────────────
