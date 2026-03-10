@@ -1,4 +1,4 @@
-# cache-bust: v3.5
+# cache-bust: v3.6
 # ─── Stage 1: Build React Frontend ──────────────────────────────────────────
 FROM node:20-alpine AS frontend-builder
 
