@@ -569,6 +569,22 @@ export default function AdvocatePortal() {
   }, [view]);
 
   // ── Voice AI Engine ──
+  const cleanForSpeech = (text) => {
+    return text
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')  // remove <think> tags
+      .replace(/\*\*(.*?)\*\*/g, '$1')             // **bold** → plain
+      .replace(/\*(.*?)\*/g, '$1')                 // *italic* → plain
+      .replace(/#{1,6}\s/g, '')                    // ## headings → plain
+      .replace(/`{1,3}(.*?)`{1,3}/g, '$1')        // `code` → plain
+      .replace(/\[(.*?)\]\(.*?\)/g, '$1')          // [link](url) → plain
+      .replace(/
+{2,}/g, '. ')                    // double newlines → pause
+      .replace(/
+/g, ', ')                        // single newlines → comma
+      .replace(/\s{2,}/g, ' ')                     // multiple spaces → one
+      .trim();
+  };
+
   const voiceSpeak = (text, onEnd) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
@@ -642,7 +658,7 @@ export default function AdvocatePortal() {
       setVoiceAiThinking(false);
       setVoiceAiReply(replyText);
       setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
-      voiceSpeak(cmd.param);
+      voiceSpeak(cleanForSpeech(cmd.param));
       return;
     } else if (cmd.action === 'stopSpeaking') {
       window.speechSynthesis?.cancel();
@@ -670,7 +686,7 @@ export default function AdvocatePortal() {
     setVoiceAiThinking(false);
     setVoiceAiReply(replyText);
     setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
-    voiceSpeak(replyText, () => {
+    voiceSpeak(cleanForSpeech(replyText), () => {
       // Auto re-listen after AI speaks if mic still on
       if (voiceAiOn) setTimeout(() => startDockListening(), 400);
     });
@@ -715,9 +731,8 @@ export default function AdvocatePortal() {
       setVoiceAiLog([]);
       setVoiceAiReply('');
       setVoiceAiTranscript('');
-      voiceSpeak('Nexus Voice AI ready. How can I help?', () => {
-        setTimeout(() => startDockListening(), 300);
-      });
+      // Start listening immediately — don't wait for speech (browser autoplay blocks it)
+      setTimeout(() => startDockListening(), 200);
     }
   };
 
