@@ -154,7 +154,9 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
         max_tokens: 1000,
         temperature: 0.7,
       }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 20000 });
-      return { text: res.data.choices[0].message.content, model: 'sarvam' };
+      const raw = res.data.choices[0].message.content;
+      const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+      return { text: clean, model: 'sarvam' };
     } catch (e) { console.log('Sarvam LLM failed, trying DeepSeek:', e.message); }
   }
 
