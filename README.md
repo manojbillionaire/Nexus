@@ -24,7 +24,7 @@ nexus-saas/
 │   └── index.html
 ├── Dockerfile                             # Multi-stage build
 ├── railway.toml                           # Railway config
-└── .env.example                           # Environment variables template
+└── .env.example                           # Environment variables  template
 ```
 
 ## 🔗 Portal Connections
