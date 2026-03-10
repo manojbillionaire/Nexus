@@ -69,6 +69,7 @@ export default function AdvocatePortal() {
   const sseRef = useRef(null);
   const dockRecRef = useRef(null);
   const dockSynthRef = useRef(null);
+  const voiceAiOnRef = useRef(false); // ref to track voiceAiOn inside callbacks
   const [notifications, setNotifications] = useState(NOTIFICATIONS);
   const [supportMsgs, setSupportMsgs] = useState([{ id: 1, role: 'ai', text: 'Hello. I am the Nexus Support AI. Please describe any issues you are facing with the platform.' }]);
   const [supportInput, setSupportInput] = useState("");
@@ -686,7 +687,7 @@ export default function AdvocatePortal() {
     setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
     voiceSpeak(cleanForSpeech(replyText), () => {
       // Auto re-listen after AI speaks if mic still on
-      if (voiceAiOn) setTimeout(() => startDockListening(), 400);
+      if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 400);
     });
   };
 
@@ -719,6 +720,7 @@ export default function AdvocatePortal() {
       try { dockRecRef.current?.stop(); } catch {}
       window.speechSynthesis?.cancel();
       setVoiceAiOn(false);
+      voiceAiOnRef.current = false;
       setVoiceAiListening(false);
       setVoiceAiSpeaking(false);
       setVoiceAiThinking(false);
@@ -726,6 +728,7 @@ export default function AdvocatePortal() {
       setVoiceAiReply('');
     } else {
       setVoiceAiOn(true);
+      voiceAiOnRef.current = true;
       setVoiceAiLog([]);
       setVoiceAiReply('');
       setVoiceAiTranscript('');
