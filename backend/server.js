@@ -57,6 +57,20 @@ const BroadcastSchema = new mongoose.Schema({
 const Advocate = mongoose.model('Advocate', AdvocateSchema);
 const Affiliate = mongoose.model('Affiliate', AffiliateSchema);
 const Broadcast = mongoose.model('Broadcast', BroadcastSchema);
+// ─── Incoming Call Schema ─────────────────────────────────────────────────────
+const IncomingCallSchema = new mongoose.Schema({
+  advocateId:  { type: String, required: true },
+  caller:      { type: String, default: 'Unknown' },
+  phone:       { type: String, default: '' },
+  duration:    { type: String, default: '' },
+  summary:     { type: String, default: '' },
+  transcript:  { type: String, default: '' },
+  status:      { type: String, default: 'incoming' }, // incoming | active | ended | missed
+  source:      { type: String, default: 'webhook' },
+  receivedAt:  { type: Date, default: Date.now },
+  endedAt:     { type: Date },
+});
+const IncomingCall = mongoose.model('IncomingCall', IncomingCallSchema);
 
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'nexusjustice_secret_2026';
