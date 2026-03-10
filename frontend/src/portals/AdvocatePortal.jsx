@@ -571,17 +571,15 @@ export default function AdvocatePortal() {
   // ── Voice AI Engine ──
   const cleanForSpeech = (text) => {
     return text
-      .replace(/<think>[\s\S]*?<\/think>/gi, '')  // remove <think> tags
-      .replace(/\*\*(.*?)\*\*/g, '$1')             // **bold** → plain
-      .replace(/\*(.*?)\*/g, '$1')                 // *italic* → plain
-      .replace(/#{1,6}\s/g, '')                    // ## headings → plain
-      .replace(/`{1,3}(.*?)`{1,3}/g, '$1')        // `code` → plain
-      .replace(/\[(.*?)\]\(.*?\)/g, '$1')          // [link](url) → plain
-      .replace(/
-{2,}/g, '. ')                    // double newlines → pause
-      .replace(/
-/g, ', ')                        // single newlines → comma
-      .replace(/\s{2,}/g, ' ')                     // multiple spaces → one
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/#{1,6} /g, '')
+      .replace(/`{1,3}(.*?)`{1,3}/g, '$1')
+      .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+      .replace(/\n{2,}/g, '. ')
+      .replace(/\n/g, ', ')
+      .replace(/\s{2,}/g, ' ')
       .trim();
   };
 
