@@ -1,13 +1,12 @@
-# cache-bust: v3.6
+# cache-bust: v3.7
 # ─── Stage 1: Build React Frontend ──────────────────────────────────────────
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-COPY frontend/package*.json ./
-RUN npm install --legacy-peer-deps
-
+# Copy ALL frontend files first so any change invalidates cache
 COPY frontend/ ./
+RUN npm install --legacy-peer-deps
 RUN npm run build
 
 # ─── Stage 2: Production Backend ────────────────────────────────────────────
