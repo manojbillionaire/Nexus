@@ -135,8 +135,15 @@ async function seedData() {
 async function callAI(prompt, systemPrompt = '', options = {}) {
   const { useSearch = false, language = 'en' } = options;
 
+  // Sanitize keys — remove ALL whitespace/newlines/invisible chars
+  const deepseekKey = (process.env.DEEPSEEK_API_KEY || '').replace(/\s/g, '');
+  const geminiKey = (process.env.GEMINI_API_KEY || '').replace(/\s/g, '');
+
+  console.log('DeepSeek key prefix:', deepseekKey.slice(0, 8));
+  console.log('Gemini key prefix:', geminiKey.slice(0, 8));
+
   // Try DeepSeek first
-  if (process.env.DEEPSEEK_API_KEY) {
+  if (deepseekKey) {
     try {
       const res = await axios.post('https://api.deepseek.com/v1/chat/completions', {
         model: 'deepseek-chat',
@@ -146,16 +153,16 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
         ],
         max_tokens: 1000,
         temperature: 0.7,
-      }, { headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` }, timeout: 15000 });
+      }, { headers: { Authorization: `Bearer ${deepseekKey}` }, timeout: 15000 });
       return { text: res.data.choices[0].message.content, model: 'deepseek' };
     } catch (e) { console.log('DeepSeek failed, trying Gemini:', e.message); }
   }
 
   // Gemini fallback
-  if (process.env.GEMINI_API_KEY) {
+  if (geminiKey) {
     try {
       const res = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
         { contents: [{ parts: [{ text: (systemPrompt ? systemPrompt + '\n\n' : '') + prompt }] }] },
         { timeout: 20000 }
       );
