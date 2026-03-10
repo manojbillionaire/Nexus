@@ -569,6 +569,42 @@ export default function AdvocatePortal() {
     if (view !== 'reading-room') stopScan();
   }, [view]);
 
+  // ── Markdown Renderer ──
+  const renderMarkdown = (text) => {
+    if (!text) return '';
+    const clean = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const lines = clean.split('\n');
+    let html = '';
+    let inList = false;
+    for (let line of lines) {
+      line = line
+        .replace(/\*\*(.*?)\*\*/g, '<strong style="color:#e2e8f0;font-weight:700">$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em style="color:#94a3b8">$1</em>')
+        .replace(/`(.*?)`/g, '<code style="background:rgba(99,102,241,.2);padding:1px 5px;border-radius:3px;font-size:11px;color:#a5b4fc">$1</code>');
+      if (/^#{3}\s/.test(line)) {
+        if (inList) { html += '</ul>'; inList = false; }
+        html += `<div style="font-size:12px;font-weight:800;color:#a5b4fc;margin:10px 0 4px;text-transform:uppercase;letter-spacing:.05em">${line.replace(/^#{3}\s/, '')}</div>`;
+      } else if (/^#{1,2}\s/.test(line)) {
+        if (inList) { html += '</ul>'; inList = false; }
+        html += `<div style="font-size:14px;font-weight:800;color:#c7d2fe;margin:12px 0 6px;border-bottom:1px solid rgba(99,102,241,.2);padding-bottom:4px">${line.replace(/^#{1,2}\s/, '')}</div>`;
+      } else if (/^[\*\-]\s/.test(line)) {
+        if (!inList) { html += '<ul style="margin:6px 0;padding-left:16px;list-style:none">'; inList = true; }
+        html += `<li style="margin:3px 0;padding-left:4px;position:relative"><span style="color:#6366f1;margin-right:6px">•</span>${line.replace(/^[\*\-]\s/, '')}</li>`;
+      } else if (/^\d+\.\s/.test(line)) {
+        if (!inList) { html += '<ol style="margin:6px 0;padding-left:20px">'; inList = true; }
+        html += `<li style="margin:3px 0">${line.replace(/^\d+\.\s/, '')}</li>`;
+      } else if (line.trim() === '') {
+        if (inList) { html += inList === 'ol' ? '</ol>' : '</ul>'; inList = false; }
+        html += '<div style="height:6px"></div>';
+      } else {
+        if (inList) { html += '</ul>'; inList = false; }
+        html += `<div style="margin:2px 0">${line}</div>`;
+      }
+    }
+    if (inList) html += '</ul>';
+    return html;
+  };
+
   // ── Voice AI Engine ──
   const cleanForSpeech = (text) => {
     return text
@@ -971,7 +1007,9 @@ export default function AdvocatePortal() {
                     )}
                     {chatHistory.map(msg => (
                       <div key={msg.id} className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                        <div style={{ maxWidth: '80%', padding: '11px 15px', borderRadius: msg.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.25)' : 'rgba(255,255,255,.06)'}`, fontSize: 13, lineHeight: 1.6, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}>{msg.text}</div>
+                        <div style={{ maxWidth: '80%', padding: '11px 15px', borderRadius: msg.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.25)' : 'rgba(255,255,255,.06)'}`, fontSize: 13, lineHeight: 1.6, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}
+                          dangerouslySetInnerHTML={msg.role === 'ai' ? { __html: renderMarkdown(msg.text) } : undefined}
+                        >{msg.role === 'user' ? msg.text : undefined}</div>
                       </div>
                     ))}
                     {consoleLoading && <div style={{ display: 'flex', gap: 5, padding: '11px 15px', width: 'fit-content', background: 'rgba(255,255,255,.04)', borderRadius: '18px 18px 18px 4px' }}>
@@ -1070,7 +1108,9 @@ export default function AdvocatePortal() {
                   )}
                   {chatHistory.map(msg => (
                     <div key={msg.id} className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                      <div style={{ maxWidth: '78%', padding: '13px 17px', borderRadius: msg.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.3)' : 'rgba(255,255,255,.07)'}`, fontSize: 13, lineHeight: 1.7, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}>{msg.text}</div>
+                      <div style={{ maxWidth: '78%', padding: '13px 17px', borderRadius: msg.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.3)' : 'rgba(255,255,255,.07)'}`, fontSize: 13, lineHeight: 1.7, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}
+                        dangerouslySetInnerHTML={msg.role === 'ai' ? { __html: renderMarkdown(msg.text) } : undefined}
+                      >{msg.role === 'user' ? msg.text : undefined}</div>
                     </div>
                   ))}
                   {consoleLoading && <div style={{ display: 'flex', gap: 6, padding: '13px 17px', width: 'fit-content', background: 'rgba(255,255,255,.04)', borderRadius: '20px 20px 20px 4px' }}>
