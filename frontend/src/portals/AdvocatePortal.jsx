@@ -872,141 +872,85 @@ export default function AdvocatePortal() {
 
           {/* COMMAND */}
           {view === 'command' && (
-            <div style={{ height: '100%', display: 'flex', gap: 20, padding: 20, overflow: 'hidden' }}>
+            <div style={{ height: '100%', display: 'flex', gap: 24, padding: 24, overflow: 'hidden' }}>
+              <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0 }}>
 
-              {/* LEFT column */}
-              <div style={{ width: 320, display: 'flex', flexDirection: 'column', gap: 14, flexShrink: 0, overflowY: 'auto' }}>
-
-                {/* Active incoming call banner */}
+                {/* Incoming call flash banner */}
                 {activeCall && (
-                  <div className="fade-up" style={{ background: 'rgba(239,68,68,.08)', border: '2px solid rgba(239,68,68,.4)', borderRadius: 18, padding: '16px 18px', boxShadow: '0 0 30px rgba(239,68,68,.15)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444', animation: 'pulse2 .8s infinite' }} />
+                  <div className="fade-up" style={{ background: 'rgba(239,68,68,.08)', border: '2px solid rgba(239,68,68,.4)', borderRadius: 16, padding: '14px 16px', boxShadow: '0 0 30px rgba(239,68,68,.15)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#ef4444', animation: 'pulse2 .8s infinite' }} />
                       <span style={{ fontSize: 9, fontWeight: 900, color: '#ef4444', letterSpacing: '0.3em', textTransform: 'uppercase' }}>Incoming Call</span>
                     </div>
-                    <div style={{ fontSize: 20, fontWeight: 900, color: '#fff', marginBottom: 4 }}>{activeCall.caller || 'Unknown Caller'}</div>
-                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>{activeCall.phone || 'No number'}</div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#fff', marginBottom: 2 }}>{activeCall.caller || 'Unknown Caller'}</div>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>{activeCall.phone || 'No number'}</div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        onClick={() => { setCalls(p => p.map(c => c._id === activeCall._id ? { ...c, status: 'ended' } : c)); setActiveCall(null); }}
-                        style={{ flex: 1, padding: '9px 0', background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.3)', borderRadius: 10, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
-                        ✕ Dismiss
-                      </button>
-                      <button
-                        onClick={() => {
-                          setConsoleInput(`A client named ${activeCall.caller || activeCall.phone} just called. Based on their call, please prepare to assist.`);
-                          setView('consult');
-                          setActiveCall(null);
-                        }}
-                        style={{ flex: 2, padding: '9px 0', background: '#6366f1', border: 'none', borderRadius: 10, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
-                        → Open in Consult AI
-                      </button>
+                      <button onClick={() => { setCalls(p => p.map(c => c._id === activeCall._id ? { ...c, status: 'ended' } : c)); setActiveCall(null); }}
+                        style={{ flex: 1, padding: '8px 0', background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.25)', borderRadius: 9, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>✕ Dismiss</button>
+                      <button onClick={() => { setConsoleInput(`Client ${activeCall.caller || activeCall.phone} just called. Please help prepare for this consultation.`); setView('consult'); setActiveCall(null); }}
+                        style={{ flex: 2, padding: '8px 0', background: '#6366f1', border: 'none', borderRadius: 9, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>→ Consult AI</button>
                     </div>
                   </div>
                 )}
 
-                {/* Webhook Setup Card */}
-                <div style={{ ...S.card, padding: 20 }}>
-                  <div style={{ fontSize: 9, color: '#f59e0b', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 10 }}>Webhook Setup</div>
-                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 12, lineHeight: 1.6 }}>
-                    Forward calls to this webhook URL. Set <code style={{ background: 'rgba(255,255,255,.06)', padding: '1px 5px', borderRadius: 4, color: '#818cf8', fontSize: 11 }}>advocateId</code> in the request body.
+                <div style={S.card}>
+                  <div style={{ color: '#f59e0b', fontSize: 9, fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 6 }}>Voice Node Alpha</div>
+                  <h3 style={{ fontSize: 28, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.03em', marginBottom: 16 }}>Command<span style={{ color: '#475569' }}>Center</span></h3>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 40, marginBottom: 16 }}>
+                    {Array.from({ length: 18 }).map((_, i) => (
+                      <div key={i} style={{ flex: 1, borderRadius: 2, background: `rgba(245,158,11,${0.2 + Math.random() * 0.6})`, height: `${20 + Math.random() * 70}%`, animation: `waveBar ${0.4 + Math.random() * 0.5}s ease-in-out infinite alternate`, animationDelay: `${i * 0.06}s` }} />
+                    ))}
                   </div>
-                  {/* Webhook URL */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Webhook URL</div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input readOnly value={`${(import.meta.env.VITE_API_URL || window.location.origin)}/api/webhook/call`}
-                        style={{ flex: 1, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 8, padding: '7px 10px', fontSize: 10, color: '#94a3b8', fontFamily: 'monospace' }} />
-                      <button onClick={() => navigator.clipboard?.writeText(`${(import.meta.env.VITE_API_URL || window.location.origin)}/api/webhook/call`)}
-                        style={{ padding: '7px 12px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 8, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>Copy</button>
-                    </div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                    <button style={{ flex: 1, padding: '9px 0', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 10, color: '#f59e0b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>● REC</button>
+                    <button style={{ flex: 1, padding: '9px 0', background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 10, color: '#64748b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>■ STOP</button>
                   </div>
-                  {/* API Key */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>API Key (query param <code style={{ color: '#818cf8' }}>?key=</code>)</div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input readOnly value="Set WEBHOOK_SECRET in Railway env vars"
-                        style={{ flex: 1, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 8, padding: '7px 10px', fontSize: 10, color: '#64748b', fontStyle: 'italic', fontFamily: 'monospace' }} />
-                    </div>
-                  </div>
-                  {/* Example payload */}
-                  <div>
-                    <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Example JSON Body</div>
-                    <pre style={{ background: 'rgba(0,0,0,.3)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 8, padding: '10px 12px', fontSize: 10, color: '#64748b', margin: 0, overflowX: 'auto', lineHeight: 1.7 }}>{`{
-  "advocateId": "YOUR_ADVOCATE_ID",
-  "caller": "Raju Kumar",
-  "phone": "+91 9876543210",
-  "status": "incoming"
-}`}</pre>
-                  </div>
+                  <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase' }}>Next: Sreedharan K. — 2:30 PM</div>
                 </div>
 
-                {/* Call Log */}
-                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', padding: 20, minHeight: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase' }}>Call Log</div>
-                    <span style={{ fontSize: 9, color: '#334155', fontWeight: 700 }}>{calls.length} calls</span>
+                <div style={{ ...S.card, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 12 }}>
+                    {calls.length > 0 ? `Call Log — ${calls.length} calls` : 'Voice History'}
                   </div>
                   <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {calls.length === 0 && (
-                      <div style={{ textAlign: 'center', padding: '24px 0', color: '#334155', fontSize: 11 }}>
-                        No calls yet. Calls forwarded via webhook will appear here in real time.
-                      </div>
-                    )}
-                    {calls.map(c => (
+                    {calls.length > 0 ? calls.map(c => (
                       <div key={c._id} className="fade-up" style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '12px 14px', border: `1px solid ${c.status === 'incoming' ? 'rgba(239,68,68,.2)' : c.status === 'missed' ? 'rgba(245,158,11,.15)' : 'rgba(255,255,255,.04)'}` }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{c.caller || 'Unknown'}</span>
-                          <span style={{ fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: c.status === 'incoming' ? '#ef4444' : c.status === 'missed' ? '#f59e0b' : c.status === 'active' ? '#10b981' : '#475569' }}>
-                            {c.status === 'incoming' ? '● Ringing' : c.status === 'active' ? '● Active' : c.status === 'missed' ? '⚠ Missed' : '✓ Ended'}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700 }}>{c.caller || 'Unknown'}</span>
+                          <span style={{ fontSize: 9, color: c.status === 'incoming' ? '#ef4444' : c.status === 'missed' ? '#f59e0b' : '#475569', fontWeight: 900, textTransform: 'uppercase' }}>
+                            {c.status === 'incoming' ? '● Ring' : c.status === 'missed' ? '⚠ Missed' : c.duration || '—'}
                           </span>
                         </div>
-                        <div style={{ fontSize: 11, color: '#475569', marginBottom: c.summary ? 5 : 0 }}>{c.phone}{c.duration ? ` · ${c.duration}` : ''} · {new Date(c.receivedAt).toLocaleTimeString()}</div>
-                        {c.summary && <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5, borderTop: '1px solid rgba(255,255,255,.04)', paddingTop: 5, marginTop: 4 }}>{c.summary}</div>}
+                        <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>{c.summary || c.phone || ''}</div>
                         <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                          <button onClick={() => { setConsoleInput(`Client ${c.caller || c.phone} called. ${c.summary || c.transcript || 'Please help prepare for this consultation.'}`); setView('consult'); }}
-                            style={{ flex: 1, padding: '5px 0', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 7, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>→ Consult AI</button>
+                          <button onClick={() => { setConsoleInput(`Client ${c.caller || c.phone} called. ${c.summary || 'Please help prepare for this consultation.'}`); setView('consult'); }}
+                            style={{ flex: 1, padding: '4px 0', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 6, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>→ Consult</button>
                           <button onClick={() => api.delete(`/api/calls/${c._id}`).then(() => setCalls(p => p.filter(x => x._id !== c._id)))}
-                            style={{ padding: '5px 10px', background: 'rgba(239,68,68,.06)', border: '1px solid rgba(239,68,68,.12)', borderRadius: 7, color: '#f87171', fontSize: 9, fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                            style={{ padding: '4px 10px', background: 'rgba(239,68,68,.06)', border: '1px solid rgba(239,68,68,.1)', borderRadius: 6, color: '#f87171', fontSize: 9, cursor: 'pointer' }}>✕</button>
                         </div>
+                      </div>
+                    )) : VOICE_RECORDS.map(r => (
+                      <div key={r.id} style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '12px 14px', border: '1px solid rgba(255,255,255,.04)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700 }}>{r.client}</span>
+                          <span style={{ fontSize: 10, color: '#475569' }}>{r.duration}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>{r.summary}</div>
+                        <div style={{ fontSize: 9, color: '#334155', marginTop: 4, fontWeight: 700 }}>{r.date}</div>
                       </div>
                     ))}
                   </div>
                 </div>
               </div>
-
-              {/* RIGHT: Consultation Console */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, overflow: 'hidden' }}>
-
-                {/* Voice waveform / status */}
-                <div style={{ ...S.card, padding: 18, flexShrink: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <div>
-                      <div style={{ color: '#f59e0b', fontSize: 9, fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 3 }}>Voice Node Alpha</div>
-                      <h3 style={{ fontSize: 20, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', margin: 0 }}>Command<span style={{ color: '#475569' }}>Center</span></h3>
-                    </div>
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 2, height: 32, marginLeft: 10 }}>
-                      {Array.from({ length: 24 }).map((_, i) => (
-                        <div key={i} style={{ flex: 1, borderRadius: 2, background: `rgba(245,158,11,${0.15 + Math.random() * 0.5})`, height: `${20 + Math.random() * 70}%`, animation: `waveBar ${0.4 + Math.random() * 0.5}s ease-in-out infinite alternate`, animationDelay: `${i * 0.05}s` }} />
-                      ))}
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                        {calls.filter(c => c.status === 'incoming' || c.status === 'active').length > 0 ? '● Active Call' : `${calls.length} calls today`}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* AI Consultation Console */}
-                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: 20 }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
+                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                   <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Nexus AI Legal Engine</div>
-                  <h3 style={{ fontSize: 20, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', marginBottom: 14 }}>Consultation<span style={{ color: '#475569', fontStyle: 'normal' }}> Console</span></h3>
+                  <h3 style={{ fontSize: 22, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', marginBottom: 14 }}>Consultation<span style={{ color: '#475569', fontStyle: 'normal' }}> Console</span></h3>
                   <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
                     {chatHistory.length === 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, opacity: .4 }}>
                         <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" size={40} strokeWidth={1.5} />
-                        <p style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>When a call arrives, click → Consult AI to brief the AI automatically</p>
+                        <p style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>Begin legal consultation</p>
                       </div>
                     )}
                     {chatHistory.map(msg => (
@@ -1019,7 +963,7 @@ export default function AdvocatePortal() {
                     </div>}
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections… or click → Consult AI on a call" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: '11px 15px', fontSize: 13 }} />
+                    <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections…" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: '11px 15px', fontSize: 13 }} />
                     <button onClick={sendConsult} style={{ padding: '11px 20px', background: '#6366f1', border: 'none', borderRadius: 12, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
                   </div>
                 </div>
