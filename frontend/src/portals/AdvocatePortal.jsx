@@ -26,6 +26,12 @@ const NOTIFICATIONS = [
   { id: 2, message: "John Doe (555-0192) joined under you — congratulations!", date: "2026-02-27", read: false, type: 'payment' },
 ];
 
+const DEMO_AI_REPLIES = [
+  "Based on the consultation history, Section 6 of the Specific Relief Act, 1963 applies — recovery of possession of immovable property. I recommend filing an interim injunction under Order XXXIX Rules 1 & 2 of CPC to restrain further encroachment. Shall I draft the petition?",
+  "Under the Consumer Protection Act 2019, you may approach the District Consumer Disputes Redressal Commission for claims up to ₹1 crore. The process is straightforward — no lawyer is mandatory. Would you like guidance on documentation?",
+  "For IPR infringement, Section 51 of the Copyright Act or Section 29 of the Trade Marks Act, 1999 may apply. I recommend a Cease & Desist notice first, followed by a civil suit for injunction and damages. I can draft the notice now.",
+];
+let demoIdx = 0;
 
 const LAW_CATEGORIES = [
   { id: 'railway', label: 'Railway Law', color: '#f59e0b' },
@@ -47,8 +53,22 @@ export default function AdvocatePortal() {
   const [addingClient, setAddingClient] = useState(false);
   const [newClient, setNewClient] = useState({});
   const [chatHistory, setChatHistory] = useState([]);
-  const [micOn, setMicOn] = useState(false);
+  // ── Nexus Voice AI (dock) ──
+  const [voiceAiOn, setVoiceAiOn] = useState(false);
+  const [voiceAiListening, setVoiceAiListening] = useState(false);
+  const [voiceAiThinking, setVoiceAiThinking] = useState(false);
+  const [voiceAiSpeaking, setVoiceAiSpeaking] = useState(false);
+  const [voiceAiTranscript, setVoiceAiTranscript] = useState('');
+  const [voiceAiReply, setVoiceAiReply] = useState('');
+  const [voiceAiLog, setVoiceAiLog] = useState([]);
   const [camOn, setCamOn] = useState(false);
+  // ── Incoming Calls (real telephone integration) ──
+  const [calls, setCalls] = useState([]);
+  const [activeCall, setActiveCall] = useState(null); // currently ringing call
+  const [callsLoading, setCallsLoading] = useState(false);
+  const sseRef = useRef(null);
+  const dockRecRef = useRef(null);
+  const dockSynthRef = useRef(null);
   const [notifications, setNotifications] = useState(NOTIFICATIONS);
   const [supportMsgs, setSupportMsgs] = useState([{ id: 1, role: 'ai', text: 'Hello. I am the Nexus Support AI. Please describe any issues you are facing with the platform.' }]);
   const [supportInput, setSupportInput] = useState("");
@@ -265,9 +285,13 @@ export default function AdvocatePortal() {
   const applySuggestion = (id) => setDraftSuggestions(s => s.map(x => x.id === id ? { ...x, status: 'accepted' } : x));
   const rejectSuggestion = (id) => setDraftSuggestions(s => s.map(x => x.id === id ? { ...x, status: 'rejected' } : x));
 
+  const [scanPhase, setScanPhase] = useState('idle'); // idle | live | processing | done | error
   const [scanProgress, setScanProgress] = useState(0);
-  const [scanPhase, setScanPhase] = useState('idle');
+  const [scannedText, setScannedText] = useState('');
+  const [scanError, setScanError] = useState('');
+  const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const streamRef = useRef(null);
   const scanTimer = useRef(null);
   const chatRef = useRef(null);
   const supportRef = useRef(null);
@@ -277,42 +301,425 @@ export default function AdvocatePortal() {
   useEffect(() => { supportRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, [supportMsgs]);
   useEffect(() => { instrAiRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, [instrAiMsgs]);
 
-  const drawFakeDoc = () => {
-    const c = canvasRef.current; if (!c) return;
-    const ctx = c.getContext('2d');
-    c.width = 420; c.height = 320;
-    ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, 420, 320);
-    ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 20;
-    ctx.fillStyle = '#f8f6f0'; ctx.beginPath(); ctx.roundRect(60, 30, 300, 260, 4); ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = '#e8e4dc'; ctx.lineWidth = 0.5;
-    for (let y = 70; y < 270; y += 16) { ctx.beginPath(); ctx.moveTo(75, y); ctx.lineTo(345, y); ctx.stroke(); }
-    ctx.fillStyle = '#1e293b'; ctx.fillRect(60, 30, 300, 22);
-    ctx.fillStyle = '#94a3b8'; ctx.font = 'bold 9px monospace'; ctx.fillText('LEGAL DOCUMENT — CONFIDENTIAL', 75, 45);
-    [{ y: 72, w: 240, b: true }, { y: 88, w: 180 }, { y: 104, w: 260 }, { y: 136, w: 280 }, { y: 152, w: 255 }, { y: 168, w: 270 }, { y: 200, w: 290 }, { y: 216, w: 265 }, { y: 232, w: 240 }, { y: 248, w: 280 }, { y: 264, w: 160 }].forEach(l => {
-      if (!l.w) return;
-      ctx.fillStyle = l.b ? '#1e293b' : '#374151'; ctx.fillRect(75, l.y - 10, l.w, l.b ? 8 : 6);
-      if (!l.b) { ctx.fillStyle = '#f8f6f0'; for (let x = 75; x < 75 + l.w; x += Math.random() * 18 + 8) ctx.fillRect(x, l.y - 10, 3, 6); }
+  // ── SSE: listen for real-time incoming calls ──
+  useEffect(() => {
+    const token = localStorage.getItem('nj_token');
+    if (!token) return;
+    // Load existing call history
+    api.get('/api/calls').then(r => setCalls(r.data.calls || [])).catch(() => {});
+    // Open SSE stream
+    const BASE = import.meta.env.VITE_API_URL || '';
+    const es = new EventSource(`${BASE}/api/calls/stream?token=${token}`);
+    sseRef.current = es;
+    es.addEventListener('call', (e) => {
+      const call = JSON.parse(e.data);
+      setCalls(prev => {
+        const idx = prev.findIndex(c => c._id === call._id);
+        if (idx >= 0) { const n = [...prev]; n[idx] = call; return n; }
+        return [call, ...prev];
+      });
+      if (call.status === 'incoming') {
+        setActiveCall(call);
+        // Flash notification
+        setNotifications(n => [{ id: Date.now(), message: `📞 Incoming call from ${call.caller || call.phone}`, date: new Date().toISOString().slice(0,10), read: false, type: 'call' }, ...n]);
+        // Voice announce if Voice AI is on
+        if (voiceAiOn) voiceSpeak(`Incoming call from ${call.caller || 'unknown caller'}`);
+      } else if (call.status === 'ended' || call.status === 'missed') {
+        setActiveCall(null);
+      }
     });
-    ctx.strokeStyle = 'rgba(220,38,38,0.4)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.ellipse(310, 240, 40, 24, -0.3, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = 'rgba(220,38,38,0.35)'; ctx.font = 'bold 7px sans-serif';
-    ctx.fillText('COURT', 292, 236); ctx.fillText('CERTIFIED', 289, 246);
-    const vg = ctx.createRadialGradient(210, 160, 80, 210, 160, 220);
-    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
-    ctx.fillStyle = vg; ctx.fillRect(0, 0, 420, 320);
+    es.onerror = () => es.close();
+    return () => es.close();
+  }, []);
+
+  // ── Doc Converter + Translator state ──
+  const [convPhase, setConvPhase] = useState('idle'); // idle | starting | live | processing | done | error
+  const [convProgress, setConvProgress] = useState(0);
+  const [convPages, setConvPages] = useState([]); // array of { dataUrl, text }
+  const [convError, setConvError] = useState('');
+  const [convAiSummary, setConvAiSummary] = useState('');
+  const [convAiLoading, setConvAiLoading] = useState(false);
+  const [convExporting, setConvExporting] = useState(false);
+
+  // ── Translator state ──
+  const SARVAM_LANGS = [
+    { code: 'hi-IN', label: 'Hindi', native: 'हिन्दी' },
+    { code: 'ml-IN', label: 'Malayalam', native: 'മലയാളം' },
+    { code: 'ta-IN', label: 'Tamil', native: 'தமிழ்' },
+    { code: 'te-IN', label: 'Telugu', native: 'తెలుగు' },
+    { code: 'kn-IN', label: 'Kannada', native: 'ಕನ್ನಡ' },
+    { code: 'mr-IN', label: 'Marathi', native: 'मराठी' },
+    { code: 'gu-IN', label: 'Gujarati', native: 'ગુજરાતી' },
+    { code: 'pa-IN', label: 'Punjabi', native: 'ਪੰਜਾਬੀ' },
+    { code: 'bn-IN', label: 'Bengali', native: 'বাংলা' },
+    { code: 'od-IN', label: 'Odia', native: 'ଓଡ଼ିଆ' },
+    { code: 'ur-IN', label: 'Urdu', native: 'اردو' },
+  ];
+  const [transSourceText, setTransSourceText] = useState('');
+  const [transTargetLang, setTransTargetLang] = useState('ml-IN');
+  const [transResult, setTransResult] = useState('');
+  const [transLoading, setTransLoading] = useState(false);
+  const [transError, setTransError] = useState('');
+  const [transFallback, setTransFallback] = useState(false);
+  const [transTtsLoading, setTransTtsLoading] = useState(false);
+
+  const doTranslate = async () => {
+    if (!transSourceText.trim()) return;
+    setTransLoading(true); setTransResult(''); setTransError(''); setTransFallback(false);
+    try {
+      const res = await api.post('/api/sarvam/translate', { text: transSourceText.trim(), targetLang: transTargetLang });
+      setTransResult(res.data.translated);
+      setTransFallback(!!res.data.fallback);
+    } catch (e) {
+      setTransError('Translation failed. Please check your Sarvam API key in Railway.');
+    }
+    setTransLoading(false);
   };
 
-  const startScan = () => { setScanPhase('live'); setScanProgress(0); setTimeout(drawFakeDoc, 80); };
-  const captureScan = () => {
-    setScanPhase('processing'); setScanProgress(0); let p = 0;
-    scanTimer.current = setInterval(() => {
-      p += Math.random() * 9 + 3;
-      if (p >= 100) { p = 100; clearInterval(scanTimer.current); setTimeout(() => setScanPhase('done'), 400); }
-      setScanProgress(Math.min(Math.round(p), 100));
-    }, 110);
+  const doTts = async () => {
+    if (!transResult) return;
+    setTransTtsLoading(true);
+    try {
+      const res = await api.post('/api/sarvam/tts', { text: transResult, lang: transTargetLang });
+      if (res.data.ok && res.data.audio) {
+        const audio = new Audio('data:audio/wav;base64,' + res.data.audio);
+        audio.play();
+      }
+    } catch { /* silent fail — fallback to browser TTS */ 
+      const utt = new SpeechSynthesisUtterance(transResult);
+      window.speechSynthesis.speak(utt);
+    }
+    setTransTtsLoading(false);
   };
-  const stopScan = () => { clearInterval(scanTimer.current); setScanPhase('idle'); setScanProgress(0); };
+
+  const useScannedTextForTranslation = () => {
+    const text = convPages.map(p => p.text).join('\n\n').trim();
+    if (text) { setTransSourceText(text.slice(0, 2000)); setTransResult(''); }
+  };
+  const convVideoRef = useRef(null);
+  const convCanvasRef = useRef(null);
+  const convStreamRef = useRef(null);
+
+  const convStartCamera = async () => {
+    setConvError(''); setConvPhase('starting');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      convStreamRef.current = stream;
+      if (convVideoRef.current) { convVideoRef.current.srcObject = stream; await convVideoRef.current.play(); }
+      setConvPhase('live');
+    } catch {
+      setConvError('Camera access denied. Please allow camera permission and try again.');
+      setConvPhase('error');
+    }
+  };
+
+  const convCapturePage = async () => {
+    if (!convVideoRef.current || !convCanvasRef.current) return;
+    setConvPhase('processing'); setConvProgress(10);
+    const video = convVideoRef.current;
+    const canvas = convCanvasRef.current;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    setConvProgress(30);
+    try {
+      if (!window.Tesseract) {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+          s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        });
+      }
+      const result = await window.Tesseract.recognize(canvas, 'eng', {
+        logger: m => { if (m.status === 'recognizing text') setConvProgress(30 + Math.round(m.progress * 60)); }
+      });
+      const text = result.data.text.trim();
+      setConvPages(p => [...p, { dataUrl, text, id: Date.now() }]);
+      setConvProgress(100);
+      setConvPhase('live'); // ready for next page
+    } catch (e) {
+      setConvError('OCR failed: ' + e.message); setConvPhase('error');
+    }
+  };
+
+  const convStopCamera = () => {
+    if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
+    if (convVideoRef.current) convVideoRef.current.srcObject = null;
+  };
+
+  const convReset = () => { convStopCamera(); setConvPhase('idle'); setConvPages([]); setConvError(''); setConvAiSummary(''); setConvProgress(0); };
+
+  const convFinish = () => { convStopCamera(); setConvPhase('done'); };
+
+  const convAiAnalyse = async () => {
+    if (!convPages.length) return;
+    setConvAiLoading(true); setConvAiSummary('');
+    const fullText = convPages.map((p, i) => `--- Page ${i+1} ---\n${p.text}`).join('\n\n');
+    try {
+      const res = await api.post('/api/ai/consult', {
+        message: `Analyse this scanned legal document and provide: 1) Document type, 2) Key parties involved, 3) Main legal issues, 4) Important dates/sections, 5) Recommended next steps.\n\nDocument text:\n${fullText.slice(0, 3000)}`,
+        history: []
+      });
+      setConvAiSummary(res.data.reply);
+    } catch {
+      setConvAiSummary('AI analysis unavailable. Please check your API keys.');
+    }
+    setConvAiLoading(false);
+  };
+
+  const convExportTxt = () => {
+    const text = convPages.map((p, i) => `=== PAGE ${i+1} ===\n${p.text}`).join('\n\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    a.download = 'converted-document.txt'; a.click();
+  };
+
+  // Stop converter camera when leaving view
+  useEffect(() => { if (view !== 'doc-converter') convStopCamera(); }, [view]);
+
+  // ── Real Camera + OCR ──
+  const startScan = async () => {
+    setScanError('');
+    setScanPhase('starting');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setScanPhase('live');
+      setScanProgress(0);
+    } catch (err) {
+      setScanError('Camera access denied. Please allow camera permission in your browser and try again.');
+      setScanPhase('error');
+    }
+  };
+
+  const captureScan = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    setScanPhase('processing');
+    setScanProgress(10);
+    setScannedText('');
+    // Draw current video frame onto canvas
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setScanProgress(25);
+    try {
+      // Load Tesseract from CDN dynamically
+      if (!window.Tesseract) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+          s.onload = resolve; s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      setScanProgress(40);
+      const result = await window.Tesseract.recognize(canvas, 'eng', {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            setScanProgress(40 + Math.round(m.progress * 55));
+          }
+        }
+      });
+      const text = result.data.text.trim();
+      setScannedText(text || 'No text detected. Try holding the document closer and ensure good lighting.');
+      setScanProgress(100);
+      setScanPhase('done');
+    } catch (err) {
+      setScanError('OCR failed: ' + err.message);
+      setScanPhase('error');
+    }
+  };
+
+  const stopScan = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setScanPhase('idle');
+    setScanProgress(0);
+    setScanError('');
+  };
+
+  const rescan = () => {
+    setScannedText('');
+    setScanPhase('live');
+    setScanProgress(0);
+    setScanError('');
+  };
+
+  // Stop camera when leaving reading-room view
+  useEffect(() => {
+    if (view !== 'reading-room') stopScan();
+  }, [view]);
+
+  // ── Voice AI Engine ──
+  const voiceSpeak = (text, onEnd) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-IN'; utt.rate = 0.95; utt.pitch = 1.05;
+    utt.onstart = () => setVoiceAiSpeaking(true);
+    utt.onend = () => { setVoiceAiSpeaking(false); onEnd?.(); };
+    utt.onerror = () => { setVoiceAiSpeaking(false); onEnd?.(); };
+    dockSynthRef.current = utt;
+    window.speechSynthesis.speak(utt);
+  };
+
+  // Parse voice command → action, returns { action, param } or null
+  const parseVoiceCommand = (text) => {
+    const t = text.toLowerCase().trim();
+    // Navigation commands
+    if (/\b(go to|open|show|navigate to|switch to)\b/.test(t)) {
+      if (/consult|legal|advice|ask/.test(t)) return { action: 'navigate', param: 'consult' };
+      if (/command|home|dashboard/.test(t)) return { action: 'navigate', param: 'command' };
+      if (/client|case|registry/.test(t)) return { action: 'navigate', param: 'clients' };
+      if (/knowledge|law base|documents/.test(t)) return { action: 'navigate', param: 'knowledge-base' };
+      if (/instruct|temporary|memo/.test(t)) return { action: 'navigate', param: 'temp-instructions' };
+      if (/notif|alert/.test(t)) return { action: 'navigate', param: 'notifications' };
+      if (/support|help desk/.test(t)) return { action: 'navigate', param: 'support' };
+      if (/read|reading room|scanner|scan|ocr/.test(t)) return { action: 'navigate', param: 'reading-room' };
+      if (/convert|document convert/.test(t)) return { action: 'navigate', param: 'doc-converter' };
+      if (/writ|draft|desk/.test(t)) return { action: 'navigate', param: 'writing-desk' };
+      if (/feed|update|hearing/.test(t)) return { action: 'navigate', param: 'feed' };
+    }
+    // Direct navigation shortcuts (no verb needed)
+    if (/^(consult|legal consult)$/.test(t)) return { action: 'navigate', param: 'consult' };
+    if (/^(clients|my clients)$/.test(t)) return { action: 'navigate', param: 'clients' };
+    if (/^(feed|news)$/.test(t)) return { action: 'navigate', param: 'feed' };
+    if (/^(reading room|scanner)$/.test(t)) return { action: 'navigate', param: 'reading-room' };
+    if (/^(writing desk|drafting)$/.test(t)) return { action: 'navigate', param: 'writing-desk' };
+    // Start camera (reading room)
+    if (/start (the )?camera|open camera|scan document/.test(t)) return { action: 'startCamera', param: null };
+    // Start doc converter camera
+    if (/convert document|document converter|start convert/.test(t)) return { action: 'startConverter', param: null };
+    // Read aloud
+    if (/read (it |this |the document |aloud|out loud)?/.test(t) && scannedText) return { action: 'readAloud', param: scannedText };
+    // Stop reading
+    if (/stop (reading|speaking|talking)|quiet|silence/.test(t)) return { action: 'stopSpeaking', param: null };
+    // Add instruction
+    const instrMatch = t.match(/add instruction[:\s]+(.+)/);
+    if (instrMatch) return { action: 'addInstruction', param: instrMatch[1] };
+    // Everything else → ask Consult AI
+    return { action: 'askAI', param: text };
+  };
+
+  const executeVoiceCommand = async (transcript) => {
+    setVoiceAiThinking(true);
+    setVoiceAiTranscript(transcript);
+    const cmd = parseVoiceCommand(transcript);
+    let replyText = '';
+
+    if (cmd.action === 'navigate') {
+      const labels = { command: 'Command Center', consult: 'Legal Consultant', clients: 'Client Registry', 'knowledge-base': 'Knowledge Base', 'temp-instructions': 'Instructions', notifications: 'Notifications', support: 'Help Desk', 'reading-room': 'Reading Room', 'doc-converter': 'Document Converter', 'writing-desk': 'Writing Desk', feed: 'Feed' };
+      setView(cmd.param);
+      replyText = `Opening ${labels[cmd.param] || cmd.param}.`;
+    } else if (cmd.action === 'startCamera') {
+      setView('reading-room');
+      setTimeout(() => startScan(), 600);
+      replyText = 'Opening Reading Room and starting camera.';
+    } else if (cmd.action === 'startConverter') {
+      setView('doc-converter');
+      setTimeout(() => convStartCamera(), 600);
+      replyText = 'Opening Document Converter and starting camera.';
+    } else if (cmd.action === 'readAloud') {
+      replyText = 'Reading scanned text aloud.';
+      setVoiceAiThinking(false);
+      setVoiceAiReply(replyText);
+      setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
+      voiceSpeak(cmd.param);
+      return;
+    } else if (cmd.action === 'stopSpeaking') {
+      window.speechSynthesis?.cancel();
+      setVoiceAiSpeaking(false);
+      replyText = 'Stopped.';
+    } else if (cmd.action === 'addInstruction') {
+      setTempInstructions(t => [...t, { id: Date.now(), text: cmd.param, active: true, created: new Date().toLocaleString() }]);
+      replyText = `Instruction added: "${cmd.param}"`;
+    } else {
+      // Ask real AI
+      try {
+        const history = voiceAiLog.slice(-6).map(m => ({ role: m.role, text: m.text }));
+        const res = await api.post('/api/ai/consult', { message: transcript, history });
+        replyText = res.data.reply;
+        // Also populate consult tab
+        setChatHistory(h => [...h,
+          { role: 'user', text: transcript, id: Date.now() },
+          { role: 'ai', text: replyText, id: Date.now() + 1 }
+        ]);
+      } catch {
+        replyText = 'AI service unavailable. Please check your API keys.';
+      }
+    }
+
+    setVoiceAiThinking(false);
+    setVoiceAiReply(replyText);
+    setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
+    voiceSpeak(replyText, () => {
+      // Auto re-listen after AI speaks if mic still on
+      if (voiceAiOn) setTimeout(() => startDockListening(), 400);
+    });
+  };
+
+  const startDockListening = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { voiceSpeak('Speech recognition is not supported in this browser. Please use Chrome.'); return; }
+    if (dockRecRef.current) { try { dockRecRef.current.stop(); } catch {} }
+    const rec = new SR();
+    rec.lang = 'en-IN'; rec.continuous = false; rec.interimResults = false;
+    rec.onstart = () => setVoiceAiListening(true);
+    rec.onresult = (e) => {
+      const text = e.results[0][0].transcript;
+      setVoiceAiListening(false);
+      executeVoiceCommand(text);
+    };
+    rec.onerror = (e) => {
+      setVoiceAiListening(false);
+      if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
+      }
+    };
+    rec.onend = () => setVoiceAiListening(false);
+    dockRecRef.current = rec;
+    rec.start();
+  };
+
+  const toggleVoiceAi = () => {
+    if (voiceAiOn) {
+      // Turn off
+      try { dockRecRef.current?.stop(); } catch {}
+      window.speechSynthesis?.cancel();
+      setVoiceAiOn(false);
+      setVoiceAiListening(false);
+      setVoiceAiSpeaking(false);
+      setVoiceAiThinking(false);
+      setVoiceAiTranscript('');
+      setVoiceAiReply('');
+    } else {
+      setVoiceAiOn(true);
+      setVoiceAiLog([]);
+      setVoiceAiReply('');
+      setVoiceAiTranscript('');
+      voiceSpeak('Nexus Voice AI ready. How can I help?', () => {
+        setTimeout(() => startDockListening(), 300);
+      });
+    }
+  };
 
   const sendConsult = async () => {
     if (!consoleInput.trim() || consoleLoading) return;
@@ -465,47 +872,141 @@ export default function AdvocatePortal() {
 
           {/* COMMAND */}
           {view === 'command' && (
-            <div style={{ height: '100%', display: 'flex', gap: 24, padding: 24, overflow: 'hidden' }}>
-              <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0 }}>
-                <div style={S.card}>
-                  <div style={{ color: '#f59e0b', fontSize: 9, fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 6 }}>Voice Node Alpha</div>
-                  <h3 style={{ fontSize: 28, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.03em', marginBottom: 16 }}>Command<span style={{ color: '#475569' }}>Center</span></h3>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 40, marginBottom: 16 }}>
-                    {Array.from({ length: 18 }).map((_, i) => (
-                      <div key={i} style={{ flex: 1, borderRadius: 2, background: `rgba(245,158,11,${0.2 + Math.random() * 0.6})`, height: `${20 + Math.random() * 70}%`, animation: `waveBar ${0.4 + Math.random() * 0.5}s ease-in-out infinite alternate`, animationDelay: `${i * 0.06}s` }} />
-                    ))}
+            <div style={{ height: '100%', display: 'flex', gap: 20, padding: 20, overflow: 'hidden' }}>
+
+              {/* LEFT column */}
+              <div style={{ width: 320, display: 'flex', flexDirection: 'column', gap: 14, flexShrink: 0, overflowY: 'auto' }}>
+
+                {/* Active incoming call banner */}
+                {activeCall && (
+                  <div className="fade-up" style={{ background: 'rgba(239,68,68,.08)', border: '2px solid rgba(239,68,68,.4)', borderRadius: 18, padding: '16px 18px', boxShadow: '0 0 30px rgba(239,68,68,.15)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444', animation: 'pulse2 .8s infinite' }} />
+                      <span style={{ fontSize: 9, fontWeight: 900, color: '#ef4444', letterSpacing: '0.3em', textTransform: 'uppercase' }}>Incoming Call</span>
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: '#fff', marginBottom: 4 }}>{activeCall.caller || 'Unknown Caller'}</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>{activeCall.phone || 'No number'}</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => { setCalls(p => p.map(c => c._id === activeCall._id ? { ...c, status: 'ended' } : c)); setActiveCall(null); }}
+                        style={{ flex: 1, padding: '9px 0', background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.3)', borderRadius: 10, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                        ✕ Dismiss
+                      </button>
+                      <button
+                        onClick={() => {
+                          setConsoleInput(`A client named ${activeCall.caller || activeCall.phone} just called. Based on their call, please prepare to assist.`);
+                          setView('consult');
+                          setActiveCall(null);
+                        }}
+                        style={{ flex: 2, padding: '9px 0', background: '#6366f1', border: 'none', borderRadius: 10, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                        → Open in Consult AI
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                    <button style={{ flex: 1, padding: '9px 0', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 10, color: '#f59e0b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>● REC</button>
-                    <button style={{ flex: 1, padding: '9px 0', background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 10, color: '#64748b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>■ STOP</button>
+                )}
+
+                {/* Webhook Setup Card */}
+                <div style={{ ...S.card, padding: 20 }}>
+                  <div style={{ fontSize: 9, color: '#f59e0b', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 10 }}>Webhook Setup</div>
+                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 12, lineHeight: 1.6 }}>
+                    Forward calls to this webhook URL. Set <code style={{ background: 'rgba(255,255,255,.06)', padding: '1px 5px', borderRadius: 4, color: '#818cf8', fontSize: 11 }}>advocateId</code> in the request body.
                   </div>
-                  <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase' }}>Next: Sreedharan K. — 2:30 PM</div>
+                  {/* Webhook URL */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Webhook URL</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input readOnly value={`${(import.meta.env.VITE_API_URL || window.location.origin)}/api/webhook/call`}
+                        style={{ flex: 1, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 8, padding: '7px 10px', fontSize: 10, color: '#94a3b8', fontFamily: 'monospace' }} />
+                      <button onClick={() => navigator.clipboard?.writeText(`${(import.meta.env.VITE_API_URL || window.location.origin)}/api/webhook/call`)}
+                        style={{ padding: '7px 12px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 8, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>Copy</button>
+                    </div>
+                  </div>
+                  {/* API Key */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>API Key (query param <code style={{ color: '#818cf8' }}>?key=</code>)</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input readOnly value="Set WEBHOOK_SECRET in Railway env vars"
+                        style={{ flex: 1, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 8, padding: '7px 10px', fontSize: 10, color: '#64748b', fontStyle: 'italic', fontFamily: 'monospace' }} />
+                    </div>
+                  </div>
+                  {/* Example payload */}
+                  <div>
+                    <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Example JSON Body</div>
+                    <pre style={{ background: 'rgba(0,0,0,.3)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 8, padding: '10px 12px', fontSize: 10, color: '#64748b', margin: 0, overflowX: 'auto', lineHeight: 1.7 }}>{`{
+  "advocateId": "YOUR_ADVOCATE_ID",
+  "caller": "Raju Kumar",
+  "phone": "+91 9876543210",
+  "status": "incoming"
+}`}</pre>
+                  </div>
                 </div>
-                <div style={{ ...S.card, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 12 }}>Voice History</div>
+
+                {/* Call Log */}
+                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', padding: 20, minHeight: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase' }}>Call Log</div>
+                    <span style={{ fontSize: 9, color: '#334155', fontWeight: 700 }}>{calls.length} calls</span>
+                  </div>
                   <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {VOICE_RECORDS.map(r => (
-                      <div key={r.id} style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '12px 14px', border: '1px solid rgba(255,255,255,.04)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700 }}>{r.client}</span>
-                          <span style={{ fontSize: 10, color: '#475569' }}>{r.duration}</span>
+                    {calls.length === 0 && (
+                      <div style={{ textAlign: 'center', padding: '24px 0', color: '#334155', fontSize: 11 }}>
+                        No calls yet. Calls forwarded via webhook will appear here in real time.
+                      </div>
+                    )}
+                    {calls.map(c => (
+                      <div key={c._id} className="fade-up" style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '12px 14px', border: `1px solid ${c.status === 'incoming' ? 'rgba(239,68,68,.2)' : c.status === 'missed' ? 'rgba(245,158,11,.15)' : 'rgba(255,255,255,.04)'}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{c.caller || 'Unknown'}</span>
+                          <span style={{ fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: c.status === 'incoming' ? '#ef4444' : c.status === 'missed' ? '#f59e0b' : c.status === 'active' ? '#10b981' : '#475569' }}>
+                            {c.status === 'incoming' ? '● Ringing' : c.status === 'active' ? '● Active' : c.status === 'missed' ? '⚠ Missed' : '✓ Ended'}
+                          </span>
                         </div>
-                        <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>{r.summary}</div>
-                        <div style={{ fontSize: 9, color: '#334155', marginTop: 4, fontWeight: 700 }}>{r.date}</div>
+                        <div style={{ fontSize: 11, color: '#475569', marginBottom: c.summary ? 5 : 0 }}>{c.phone}{c.duration ? ` · ${c.duration}` : ''} · {new Date(c.receivedAt).toLocaleTimeString()}</div>
+                        {c.summary && <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5, borderTop: '1px solid rgba(255,255,255,.04)', paddingTop: 5, marginTop: 4 }}>{c.summary}</div>}
+                        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                          <button onClick={() => { setConsoleInput(`Client ${c.caller || c.phone} called. ${c.summary || c.transcript || 'Please help prepare for this consultation.'}`); setView('consult'); }}
+                            style={{ flex: 1, padding: '5px 0', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 7, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>→ Consult AI</button>
+                          <button onClick={() => api.delete(`/api/calls/${c._id}`).then(() => setCalls(p => p.filter(x => x._id !== c._id)))}
+                            style={{ padding: '5px 10px', background: 'rgba(239,68,68,.06)', border: '1px solid rgba(239,68,68,.12)', borderRadius: 7, color: '#f87171', fontSize: 9, fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               </div>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
-                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+              {/* RIGHT: Consultation Console */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, overflow: 'hidden' }}>
+
+                {/* Voice waveform / status */}
+                <div style={{ ...S.card, padding: 18, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div>
+                      <div style={{ color: '#f59e0b', fontSize: 9, fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 3 }}>Voice Node Alpha</div>
+                      <h3 style={{ fontSize: 20, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', margin: 0 }}>Command<span style={{ color: '#475569' }}>Center</span></h3>
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 2, height: 32, marginLeft: 10 }}>
+                      {Array.from({ length: 24 }).map((_, i) => (
+                        <div key={i} style={{ flex: 1, borderRadius: 2, background: `rgba(245,158,11,${0.15 + Math.random() * 0.5})`, height: `${20 + Math.random() * 70}%`, animation: `waveBar ${0.4 + Math.random() * 0.5}s ease-in-out infinite alternate`, animationDelay: `${i * 0.05}s` }} />
+                      ))}
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontSize: 9, color: '#334155', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                        {calls.filter(c => c.status === 'incoming' || c.status === 'active').length > 0 ? '● Active Call' : `${calls.length} calls today`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* AI Consultation Console */}
+                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: 20 }}>
                   <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Nexus AI Legal Engine</div>
-                  <h3 style={{ fontSize: 22, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', marginBottom: 14 }}>Consultation<span style={{ color: '#475569', fontStyle: 'normal' }}> Console</span></h3>
+                  <h3 style={{ fontSize: 20, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', marginBottom: 14 }}>Consultation<span style={{ color: '#475569', fontStyle: 'normal' }}> Console</span></h3>
                   <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
                     {chatHistory.length === 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, opacity: .4 }}>
                         <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" size={40} strokeWidth={1.5} />
-                        <p style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>Begin legal consultation</p>
+                        <p style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>When a call arrives, click → Consult AI to brief the AI automatically</p>
                       </div>
                     )}
                     {chatHistory.map(msg => (
@@ -518,7 +1019,7 @@ export default function AdvocatePortal() {
                     </div>}
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections…" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: '11px 15px', fontSize: 13 }} />
+                    <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections… or click → Consult AI on a call" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: '11px 15px', fontSize: 13 }} />
                     <button onClick={sendConsult} style={{ padding: '11px 20px', background: '#6366f1', border: 'none', borderRadius: 12, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
                   </div>
                 </div>
@@ -896,52 +1397,185 @@ export default function AdvocatePortal() {
           {view === 'reading-room' && (
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#070b14', overflow: 'hidden' }}>
               <div style={{ padding: '18px 26px', borderBottom: '1px solid rgba(255,255,255,.05)', background: '#0a0f1d', flexShrink: 0 }}>
-                <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Camera OCR — Text-to-Speech</div>
+                <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Live Camera OCR — Text-to-Speech</div>
                 <h3 style={{ fontSize: 26, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', margin: 0 }}>Reading<span style={{ color: '#475569', fontStyle: 'normal' }}> Room</span></h3>
               </div>
               <div style={{ flex: 1, display: 'flex', gap: 18, padding: 18, paddingBottom: 100, overflowY: 'auto', overflowX: 'hidden' }}>
-                <div style={{ width: 380, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ background: '#0a0f1d', borderRadius: 22, border: '1px solid rgba(255,255,255,.07)', overflow: 'hidden', flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ flex: 1, background: '#050810', position: 'relative', minHeight: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                      {scanPhase === 'idle' && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, opacity: .3 }}>
-                        <Icon path="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" size={44} strokeWidth={1} />
-                        <p style={{ fontSize: 11, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.2em' }}>Camera off</p>
-                      </div>}
-                      {(scanPhase === 'live' || scanPhase === 'processing' || scanPhase === 'done') && <>
-                        <canvas ref={canvasRef} width={420} height={320} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', filter: scanPhase === 'processing' ? 'brightness(0.45)' : 'none' }} />
-                        {scanPhase === 'live' && <>
+
+                {/* Camera panel */}
+                <div style={{ width: 420, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ background: '#0a0f1d', borderRadius: 22, border: '1px solid rgba(255,255,255,.07)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+
+                    {/* Video viewport */}
+                    <div style={{ position: 'relative', background: '#050810', minHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+
+                      {/* Hidden canvas used for OCR capture only */}
+                      <canvas ref={canvasRef} style={{ display: scanPhase === 'done' ? 'block' : 'none', width: '100%', objectFit: 'cover', minHeight: 280 }} />
+
+                      {/* Idle state */}
+                      {(scanPhase === 'idle' || scanPhase === 'error') && (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: 24, textAlign: 'center' }}>
+                          <div style={{ width: 64, height: 64, borderRadius: 20, background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
+                            <Icon path="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" size={30} strokeWidth={1.5} />
+                          </div>
+                          {scanError
+                            ? <p style={{ fontSize: 12, color: '#f87171', lineHeight: 1.6, margin: 0 }}>{scanError}</p>
+                            : <p style={{ fontSize: 12, color: '#475569', lineHeight: 1.6, margin: 0 }}>Point your camera at a legal document.<br/>The live feed will appear here.</p>
+                          }
+                        </div>
+                      )}
+
+                      {/* Starting state */}
+                      {scanPhase === 'starting' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                          <div className="spin" style={{ width: 32, height: 32, borderRadius: '50%', border: '3px solid rgba(16,185,129,.2)', borderTopColor: '#10b981' }} />
+                          <p style={{ fontSize: 11, color: '#10b981', fontWeight: 700 }}>Requesting camera…</p>
+                        </div>
+                      )}
+
+                      {/* Live video feed — always rendered when stream active, hidden when idle */}
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        style={{
+                          display: (scanPhase === 'live' || scanPhase === 'processing') ? 'block' : 'none',
+                          width: '100%', height: '100%', objectFit: 'cover',
+                          filter: scanPhase === 'processing' ? 'brightness(0.4)' : 'none',
+                          minHeight: 280,
+                        }}
+                      />
+
+                      {/* LIVE badge */}
+                      {scanPhase === 'live' && (
+                        <>
                           <div style={{ position: 'absolute', left: 0, right: 0, height: 2, background: 'linear-gradient(90deg,transparent,#10b981,#6ee7b7,#10b981,transparent)', boxShadow: '0 0 18px 6px rgba(16,185,129,.5)', animation: 'scanLine 2s ease-in-out infinite' }} />
-                          <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,.65)', backdropFilter: 'blur(6px)', borderRadius: 8, padding: '4px 10px', border: '1px solid rgba(239,68,68,.3)' }}>
+                          <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,.7)', backdropFilter: 'blur(6px)', borderRadius: 8, padding: '4px 10px', border: '1px solid rgba(239,68,68,.3)' }}>
                             <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', animation: 'pulse2 1s infinite' }} />
                             <span style={{ fontSize: 9, fontWeight: 900, color: '#ef4444', letterSpacing: '0.15em', textTransform: 'uppercase' }}>Live</span>
                           </div>
-                        </>}
-                        {scanPhase === 'processing' && <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 28 }}>
-                          <div style={{ fontSize: 9, fontWeight: 900, color: '#10b981', letterSpacing: '0.25em', textTransform: 'uppercase' }}>Processing… {scanProgress}%</div>
-                          <div style={{ width: '78%', height: 4, background: 'rgba(255,255,255,.06)', borderRadius: 4 }}>
-                            <div style={{ height: '100%', borderRadius: 4, background: 'linear-gradient(90deg,#10b981,#6ee7b7)', width: `${scanProgress}%`, transition: 'width .12s' }} />
+                          <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 9, color: 'rgba(255,255,255,.4)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', background: 'rgba(0,0,0,.5)', padding: '3px 10px', borderRadius: 20, whiteSpace: 'nowrap' }}>
+                            Hold document steady · tap Capture
                           </div>
-                        </div>}
-                      </>}
+                        </>
+                      )}
+
+                      {/* Processing overlay */}
+                      {scanPhase === 'processing' && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                          <div className="spin" style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid rgba(16,185,129,.2)', borderTopColor: '#10b981' }} />
+                          <div style={{ fontSize: 10, fontWeight: 900, color: '#10b981', letterSpacing: '0.25em', textTransform: 'uppercase' }}>
+                            {scanProgress < 40 ? 'Capturing frame…' : `Recognising text… ${scanProgress}%`}
+                          </div>
+                          <div style={{ width: '72%', height: 4, background: 'rgba(255,255,255,.06)', borderRadius: 4 }}>
+                            <div style={{ height: '100%', borderRadius: 4, background: 'linear-gradient(90deg,#10b981,#6ee7b7)', width: `${scanProgress}%`, transition: 'width .15s' }} />
+                          </div>
+                        </div>
+                      )}
+
+
                     </div>
+
+                    {/* Controls */}
                     <div style={{ padding: 14, display: 'flex', gap: 9, borderTop: '1px solid rgba(255,255,255,.05)' }}>
-                      {scanPhase === 'idle' && <button onClick={startScan} style={{ flex: 1, padding: '9px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 11, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>▶ Start Camera</button>}
-                      {scanPhase === 'live' && <><button onClick={captureScan} style={{ flex: 2, padding: '9px 0', background: '#10b981', border: 'none', borderRadius: 11, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>⚡ Capture</button>
-                        <button onClick={stopScan} style={{ flex: 1, padding: '9px 0', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 11, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>■ Stop</button></>}
-                      {scanPhase === 'done' && <button onClick={stopScan} style={{ flex: 1, padding: '9px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>↺ Rescan</button>}
+                      {(scanPhase === 'idle' || scanPhase === 'error') && (
+                        <button onClick={startScan} style={{ flex: 1, padding: '10px 0', background: 'rgba(16,185,129,.12)', border: '1px solid rgba(16,185,129,.25)', borderRadius: 11, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ▶ Start Camera
+                        </button>
+                      )}
+                      {scanPhase === 'starting' && (
+                        <button disabled style={{ flex: 1, padding: '10px 0', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 11, color: '#334155', fontSize: 10, fontWeight: 900, cursor: 'default' }}>
+                          Starting…
+                        </button>
+                      )}
+                      {scanPhase === 'live' && (
+                        <>
+                          <button onClick={captureScan} style={{ flex: 2, padding: '10px 0', background: '#10b981', border: 'none', borderRadius: 11, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                            ⚡ Capture & Read
+                          </button>
+                          <button onClick={stopScan} style={{ flex: 1, padding: '10px 0', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 11, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                            ■ Stop
+                          </button>
+                        </>
+                      )}
+                      {scanPhase === 'processing' && (
+                        <button disabled style={{ flex: 1, padding: '10px 0', background: 'rgba(16,185,129,.06)', border: '1px solid rgba(16,185,129,.1)', borderRadius: 11, color: '#10b981', fontSize: 10, fontWeight: 700, cursor: 'default' }}>
+                          Processing {scanProgress}%…
+                        </button>
+                      )}
+                      {scanPhase === 'done' && (
+                        <>
+                          <button onClick={rescan} style={{ flex: 1, padding: '10px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                            ↺ Scan Again
+                          </button>
+                          <button onClick={stopScan} style={{ flex: 1, padding: '10px 0', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 11, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                            ✕ Close
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
+
+                  {/* Tips card */}
+                  <div style={{ background: 'rgba(16,185,129,.04)', border: '1px solid rgba(16,185,129,.1)', borderRadius: 16, padding: '14px 16px' }}>
+                    <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 8 }}>Tips for best results</div>
+                    {['Hold document flat & steady', 'Good lighting — avoid shadows', 'Fill the frame with the document', 'Works best with printed text'].map(tip => (
+                      <div key={tip} style={{ display: 'flex', gap: 7, marginBottom: 5, alignItems: 'center' }}>
+                        <span style={{ color: '#10b981', fontSize: 10 }}>→</span>
+                        <span style={{ fontSize: 11, color: '#475569' }}>{tip}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+
+                {/* Scanned text panel */}
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}>
                   <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                    <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 12 }}>Scanned Text</div>
-                    <div style={{ flex: 1, overflowY: 'auto', fontSize: 13, color: '#94a3b8', lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
-                      {scanPhase === 'done' ? "IN THE COURT OF THE DISTRICT JUDGE, ERNAKULAM\nO.S. No. 145 of 2025\n\nPlaintiff: Sreedharan K., House No. 42, near St. George Church, Aluva.\n\nVersus\n\nDefendant: Rajan P., House No. 43, near St. George Church, Aluva.\n\nPLAINT under Order VII Rule 1 of the Code of Civil Procedure, 1908.\n\n1. The Plaintiff is the absolute owner in possession of the land bearing Survey Number 101/2 of Aluva Village measuring 10 Cents.\n\n2. The Defendant has illegally encroached upon the Plaintiff's property by constructing a fence along the eastern boundary.\n\n3. The Plaintiff has suffered damages and requests an interim injunction." : <span style={{ color: '#334155', fontStyle: 'italic' }}>Scanned document text will appear here…</span>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase' }}>Scanned Text</div>
+                      {scanPhase === 'done' && scannedText && (
+                        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                          <span style={{ fontSize: 9, color: '#334155', fontWeight: 700 }}>{scannedText.length} chars</span>
+                        </div>
+                      )}
                     </div>
-                    {scanPhase === 'done' && <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,.05)' }}>
-                      <button style={{ flex: 1, padding: '9px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 11, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>▶ Read Aloud</button>
-                      <button style={{ flex: 1, padding: '9px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>↓ Export PDF</button>
-                    </div>}
+                    <div style={{ flex: 1, overflowY: 'auto', fontSize: 13, color: '#94a3b8', lineHeight: 1.85, whiteSpace: 'pre-wrap', fontFamily: "'Courier New', monospace" }}>
+                      {scanPhase === 'done' && scannedText
+                        ? scannedText
+                        : scanPhase === 'processing'
+                          ? <span style={{ color: '#334155', fontStyle: 'italic' }}>Recognising text, please wait…</span>
+                          : <span style={{ color: '#334155', fontStyle: 'italic' }}>Start the camera and capture a document — extracted text will appear here.</span>
+                      }
+                    </div>
+                    {scanPhase === 'done' && scannedText && (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,.05)' }}>
+                        <button
+                          onClick={() => {
+                            if (window.speechSynthesis.speaking) { window.speechSynthesis.cancel(); return; }
+                            const utt = new SpeechSynthesisUtterance(scannedText);
+                            utt.lang = 'en-IN'; utt.rate = 0.92;
+                            window.speechSynthesis.speak(utt);
+                          }}
+                          style={{ flex: 1, padding: '9px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 11, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ▶ Read Aloud
+                        </button>
+                        <button
+                          onClick={() => { navigator.clipboard?.writeText(scannedText); }}
+                          style={{ flex: 1, padding: '9px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ⎘ Copy Text
+                        </button>
+                        <button
+                          onClick={() => {
+                            const blob = new Blob([scannedText], { type: 'text/plain' });
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                            a.download = 'scanned-document.txt'; a.click();
+                          }}
+                          style={{ flex: 1, padding: '9px 0', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 11, color: '#f59e0b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ↓ Save TXT
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -950,17 +1584,463 @@ export default function AdvocatePortal() {
 
           {/* DOC CONVERTER */}
           {view === 'doc-converter' && (
-            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 22, padding: 48 }}>
-              <div style={{ width: 76, height: 76, borderRadius: 22, background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }}>
-                <Icon path="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" size={34} strokeWidth={1.5} />
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#070b14', overflow: 'hidden' }}>
+
+              {/* Header */}
+              <div style={{ padding: '16px 26px', borderBottom: '1px solid rgba(255,255,255,.05)', background: '#0a0f1d', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 3 }}>Camera OCR → AI Analysis → Export</div>
+                  <h3 style={{ fontSize: 24, fontWeight: 900, fontStyle: 'italic', margin: 0 }}>Document<span style={{ color: '#475569', fontStyle: 'normal' }}> Converter</span></h3>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {convPages.length > 0 && (
+                    <div style={{ padding: '5px 14px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 20, fontSize: 11, color: '#818cf8', fontWeight: 700 }}>
+                      {convPages.length} page{convPages.length > 1 ? 's' : ''} captured
+                    </div>
+                  )}
+                  {convPages.length > 0 && (
+                    <button onClick={convReset} style={{ padding: '6px 14px', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 10, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                      ✕ Reset
+                    </button>
+                  )}
+                </div>
               </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 8 }}>Camera OCR Engine</div>
-                <h3 style={{ fontSize: 38, fontWeight: 900, fontStyle: 'italic', margin: '0 0 10px' }}>Document<span style={{ color: '#475569', fontStyle: 'normal' }}> Converter</span></h3>
-                <p style={{ color: '#475569', fontSize: 13, maxWidth: 300, lineHeight: 1.6, margin: '0 auto 22px' }}>Camera-based legal document scanner. Capture and export as PDF or Word.</p>
+
+              <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+
+                {/* LEFT: Camera + controls */}
+                <div style={{ width: 420, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(255,255,255,.05)', overflow: 'hidden' }}>
+
+                  {/* Camera viewport */}
+                  <div style={{ flex: 1, background: '#050810', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', minHeight: 260 }}>
+                    <canvas ref={convCanvasRef} style={{ display: 'none' }} />
+
+                    {(convPhase === 'idle' || convPhase === 'error') && (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: 28, textAlign: 'center' }}>
+                        <div style={{ width: 72, height: 72, borderRadius: 22, background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }}>
+                          <Icon path="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" size={32} strokeWidth={1.5} />
+                        </div>
+                        {convError
+                          ? <p style={{ fontSize: 12, color: '#f87171', lineHeight: 1.6, margin: 0 }}>{convError}</p>
+                          : <p style={{ fontSize: 12, color: '#475569', lineHeight: 1.6, margin: 0 }}>Scan multi-page legal documents.<br />Each capture becomes one page.<br />AI will analyse the full document.</p>
+                        }
+                      </div>
+                    )}
+
+                    {convPhase === 'starting' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                        <div className="spin" style={{ width: 32, height: 32, borderRadius: '50%', border: '3px solid rgba(99,102,241,.2)', borderTopColor: '#6366f1' }} />
+                        <p style={{ fontSize: 11, color: '#818cf8', fontWeight: 700 }}>Starting camera…</p>
+                      </div>
+                    )}
+
+                    <video ref={convVideoRef} autoPlay playsInline muted
+                      style={{ display: (convPhase === 'live' || convPhase === 'processing') ? 'block' : 'none', width: '100%', height: '100%', objectFit: 'cover', minHeight: 260, filter: convPhase === 'processing' ? 'brightness(0.4)' : 'none' }}
+                    />
+
+                    {convPhase === 'live' && (
+                      <>
+                        <div style={{ position: 'absolute', left: 0, right: 0, height: 2, background: 'linear-gradient(90deg,transparent,#6366f1,#818cf8,#6366f1,transparent)', boxShadow: '0 0 14px 4px rgba(99,102,241,.5)', animation: 'scanLine 2s ease-in-out infinite' }} />
+                        <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,.7)', backdropFilter: 'blur(6px)', borderRadius: 8, padding: '4px 10px', border: '1px solid rgba(239,68,68,.3)' }}>
+                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', animation: 'pulse2 1s infinite' }} />
+                          <span style={{ fontSize: 9, fontWeight: 900, color: '#ef4444', letterSpacing: '0.15em', textTransform: 'uppercase' }}>Live</span>
+                        </div>
+                        {convPages.length > 0 && (
+                          <div style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(99,102,241,.85)', borderRadius: 8, padding: '4px 10px' }}>
+                            <span style={{ fontSize: 9, fontWeight: 900, color: '#fff' }}>Page {convPages.length + 1}</span>
+                          </div>
+                        )}
+                        <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', fontSize: 9, color: 'rgba(255,255,255,.5)', fontWeight: 700, background: 'rgba(0,0,0,.5)', padding: '3px 10px', borderRadius: 20, whiteSpace: 'nowrap' }}>
+                          Hold document steady · tap Capture
+                        </div>
+                      </>
+                    )}
+
+                    {convPhase === 'processing' && (
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                        <div className="spin" style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid rgba(99,102,241,.2)', borderTopColor: '#6366f1' }} />
+                        <div style={{ fontSize: 10, fontWeight: 900, color: '#818cf8', letterSpacing: '0.2em', textTransform: 'uppercase' }}>
+                          {convProgress < 30 ? 'Capturing…' : `Reading text… ${convProgress}%`}
+                        </div>
+                        <div style={{ width: '72%', height: 4, background: 'rgba(255,255,255,.06)', borderRadius: 4 }}>
+                          <div style={{ height: '100%', borderRadius: 4, background: 'linear-gradient(90deg,#6366f1,#818cf8)', width: `${convProgress}%`, transition: 'width .15s' }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Camera controls */}
+                  <div style={{ padding: 14, borderTop: '1px solid rgba(255,255,255,.05)', display: 'flex', gap: 8, flexWrap: 'wrap', background: '#0a0f1d' }}>
+                    {(convPhase === 'idle' || convPhase === 'error') && (
+                      <button onClick={convStartCamera} style={{ flex: 1, padding: '10px 0', background: 'rgba(99,102,241,.12)', border: '1px solid rgba(99,102,241,.25)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                        ▶ Start Camera
+                      </button>
+                    )}
+                    {convPhase === 'starting' && (
+                      <button disabled style={{ flex: 1, padding: '10px 0', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 11, color: '#334155', fontSize: 10, fontWeight: 700, cursor: 'default' }}>Starting…</button>
+                    )}
+                    {convPhase === 'live' && (
+                      <>
+                        <button onClick={convCapturePage} style={{ flex: 2, padding: '10px 0', background: '#6366f1', border: 'none', borderRadius: 11, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ⚡ Capture Page {convPages.length + 1}
+                        </button>
+                        {convPages.length > 0 && (
+                          <button onClick={convFinish} style={{ flex: 1, padding: '10px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 11, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                            ✓ Done
+                          </button>
+                        )}
+                        <button onClick={convStopCamera} style={{ flex: 1, padding: '10px 0', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 11, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ■ Stop
+                        </button>
+                      </>
+                    )}
+                    {convPhase === 'processing' && (
+                      <button disabled style={{ flex: 1, padding: '10px 0', background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.1)', borderRadius: 11, color: '#6366f1', fontSize: 10, fontWeight: 700, cursor: 'default' }}>
+                        Processing {convProgress}%…
+                      </button>
+                    )}
+                    {convPhase === 'done' && (
+                      <button onClick={convStartCamera} style={{ flex: 1, padding: '10px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                        + Add More Pages
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Captured pages thumbnails */}
+                  {convPages.length > 0 && (
+                    <div style={{ padding: '10px 14px', borderTop: '1px solid rgba(255,255,255,.05)', background: '#070b14' }}>
+                      <div style={{ fontSize: 8, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 8 }}>Captured Pages</div>
+                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                        {convPages.map((p, i) => (
+                          <div key={p.id} style={{ flexShrink: 0, position: 'relative' }}>
+                            <img src={p.dataUrl} alt={`Page ${i+1}`} style={{ width: 64, height: 48, objectFit: 'cover', borderRadius: 8, border: '1px solid rgba(99,102,241,.3)' }} />
+                            <div style={{ position: 'absolute', bottom: 2, right: 2, background: 'rgba(99,102,241,.9)', borderRadius: 4, padding: '1px 5px', fontSize: 8, color: '#fff', fontWeight: 900 }}>{i + 1}</div>
+                            <button onClick={() => setConvPages(ps => ps.filter((_, idx) => idx !== i))}
+                              style={{ position: 'absolute', top: -4, right: -4, width: 16, height: 16, borderRadius: '50%', background: '#ef4444', border: 'none', color: '#fff', fontSize: 9, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* RIGHT: AI Analysis + Text + Export */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+                  {convPages.length === 0 ? (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 32, textAlign: 'center', opacity: .5 }}>
+                      <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" size={44} strokeWidth={1} />
+                      <p style={{ fontSize: 13, color: '#475569' }}>Capture document pages using the camera.<br/>AI analysis and export will appear here.</p>
+                    </div>
+                  ) : (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+                      {/* AI Analysis panel */}
+                      <div style={{ padding: '14px 18px', borderBottom: '1px solid rgba(255,255,255,.05)', background: '#0a0f1d', flexShrink: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: convAiSummary ? 12 : 0 }}>
+                          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(99,102,241,.12)', border: '1px solid rgba(99,102,241,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#818cf8', fontSize: 8, fontWeight: 900 }}>AI</div>
+                          <div>
+                            <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase' }}>AI Legal Analysis</div>
+                            <div style={{ fontSize: 11, color: '#475569' }}>{convPages.length} page{convPages.length > 1 ? 's' : ''} · {convPages.reduce((a, p) => a + p.text.length, 0)} chars extracted</div>
+                          </div>
+                          <button
+                            onClick={convAiAnalyse}
+                            disabled={convAiLoading}
+                            style={{ marginLeft: 'auto', padding: '8px 18px', background: convAiLoading ? 'rgba(99,102,241,.2)' : '#6366f1', border: 'none', borderRadius: 10, color: '#fff', fontSize: 10, fontWeight: 900, cursor: convAiLoading ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {convAiLoading ? <><div className="spin" style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(255,255,255,.3)', borderTopColor: '#fff' }} /> Analysing…</> : '⚡ Analyse with AI'}
+                          </button>
+                        </div>
+                        {convAiSummary && (
+                          <div style={{ background: 'rgba(99,102,241,.05)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 12, padding: '12px 14px', fontSize: 12, color: '#cbd5e1', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxHeight: 180, overflowY: 'auto' }}>
+                            {convAiSummary}
+                          </div>
+                        )}
+                        {convAiLoading && !convAiSummary && (
+                          <div style={{ display: 'flex', gap: 5, padding: '10px 0' }}>
+                            {[0, 1, 2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#475569', animation: 'pulse2 1.2s infinite', animationDelay: `${i * 0.2}s` }} />)}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Extracted text per page */}
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
+                        <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 12 }}>Extracted Text</div>
+                        {convPages.map((p, i) => (
+                          <div key={p.id} style={{ marginBottom: 16 }}>
+                            <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span>Page {i + 1}</span>
+                              <span style={{ color: '#334155', fontSize: 8 }}>{p.text.length} chars</span>
+                            </div>
+                            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: '12px 14px', fontSize: 12, color: '#94a3b8', lineHeight: 1.75, whiteSpace: 'pre-wrap', fontFamily: "'Courier New', monospace", border: '1px solid rgba(255,255,255,.05)' }}>
+                              {p.text || <span style={{ color: '#334155', fontStyle: 'italic' }}>No text detected on this page.</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Export bar */}
+                      <div style={{ padding: '12px 18px', borderTop: '1px solid rgba(255,255,255,.05)', background: '#0a0f1d', display: 'flex', gap: 8 }}>
+                        <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', marginRight: 4 }}>Export:</div>
+                        <button onClick={convExportTxt} style={{ flex: 1, padding: '9px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 10, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ↓ Save as TXT
+                        </button>
+                        <button
+                          onClick={() => {
+                            const allText = convPages.map((p, i) => `=== PAGE ${i+1} ===\n${p.text}`).join('\n\n');
+                            const summary = convAiSummary ? `\n\n=== AI ANALYSIS ===\n${convAiSummary}` : '';
+                            navigator.clipboard?.writeText(allText + summary);
+                          }}
+                          style={{ flex: 1, padding: '9px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 10, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ⎘ Copy All
+                        </button>
+                        <button
+                          onClick={() => {
+                            const allText = convPages.map((p, i) => `=== PAGE ${i+1} ===\n${p.text}`).join('\n\n');
+                            const summary = convAiSummary ? `\n\n=== AI ANALYSIS ===\n${convAiSummary}` : '';
+                            setConsoleInput('I have scanned a document. Here is the extracted text:\n\n' + allText.slice(0, 2000) + '\n\nPlease advise on this document.');
+                            setView('consult');
+                          }}
+                          style={{ flex: 1, padding: '9px 0', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 10, color: '#f59e0b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          → Send to Consult AI
+                        </button>
+                      </div>
+
+                      {/* ── SARVAM TRANSLATOR ── */}
+                      <div style={{ borderTop: '2px solid rgba(99,102,241,.15)', background: '#070b14', flexShrink: 0 }}>
+
+                        {/* Translator header */}
+                        <div style={{ padding: '14px 18px 10px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 30, height: 30, borderRadius: 9, background: 'rgba(139,92,246,.12)', border: '1px solid rgba(139,92,246,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>🇮🇳</div>
+                          <div>
+                            <div style={{ fontSize: 9, color: '#8b5cf6', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase' }}>Sarvam AI · Indian Language Translator</div>
+                            <div style={{ fontSize: 11, color: '#475569', marginTop: 1 }}>Translate scanned document into any Indian language</div>
+                          </div>
+                          {convPages.length > 0 && (
+                            <button
+                              onClick={useScannedTextForTranslation}
+                              style={{ marginLeft: 'auto', padding: '6px 14px', background: 'rgba(139,92,246,.12)', border: '1px solid rgba(139,92,246,.25)', borderRadius: 9, color: '#a78bfa', fontSize: 9, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              ← Use Scanned Text
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Language selector */}
+                        <div style={{ padding: '0 18px 10px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {SARVAM_LANGS.map(lang => (
+                            <button
+                              key={lang.code}
+                              onClick={() => { setTransTargetLang(lang.code); setTransResult(''); setTransError(''); }}
+                              style={{
+                                padding: '5px 12px', borderRadius: 20, cursor: 'pointer', fontSize: 11, fontWeight: 700, transition: 'all .15s',
+                                background: transTargetLang === lang.code ? 'rgba(139,92,246,.2)' : 'rgba(255,255,255,.04)',
+                                border: `1px solid ${transTargetLang === lang.code ? 'rgba(139,92,246,.5)' : 'rgba(255,255,255,.07)'}`,
+                                color: transTargetLang === lang.code ? '#c4b5fd' : '#475569',
+                              }}>
+                              {lang.native} <span style={{ fontSize: 9, opacity: .7 }}>{lang.label}</span>
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Source + Target text boxes */}
+                        <div style={{ padding: '0 18px 14px', display: 'flex', gap: 10 }}>
+
+                          {/* Source (English) */}
+                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase' }}>English Source</span>
+                              <span style={{ fontSize: 9, color: '#334155', fontWeight: 700 }}>{transSourceText.length}/2000</span>
+                            </div>
+                            <textarea
+                              value={transSourceText}
+                              onChange={e => { setTransSourceText(e.target.value.slice(0, 2000)); setTransResult(''); setTransError(''); }}
+                              placeholder="Paste or type English text here, or click ← Use Scanned Text above…"
+                              rows={5}
+                              style={{ background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: '11px 13px', fontSize: 12, lineHeight: 1.65, resize: 'vertical', color: '#e2e8f0', outline: 'none', fontFamily: 'inherit' }}
+                            />
+                          </div>
+
+                          {/* Arrow + Translate button */}
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, flexShrink: 0, paddingTop: 22 }}>
+                            <button
+                              onClick={doTranslate}
+                              disabled={transLoading || !transSourceText.trim()}
+                              style={{
+                                width: 44, height: 44, borderRadius: '50%', border: 'none', cursor: transSourceText.trim() ? 'pointer' : 'default',
+                                background: transSourceText.trim() ? '#8b5cf6' : 'rgba(139,92,246,.2)',
+                                color: '#fff', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                boxShadow: transSourceText.trim() ? '0 0 16px rgba(139,92,246,.4)' : 'none',
+                                transition: 'all .2s',
+                              }}>
+                              {transLoading
+                                ? <div className="spin" style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid rgba(255,255,255,.3)', borderTopColor: '#fff' }} />
+                                : '→'}
+                            </button>
+                            <span style={{ fontSize: 8, color: '#334155', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                              {transLoading ? 'Translating' : 'Translate'}
+                            </span>
+                          </div>
+
+                          {/* Target (Indian language) */}
+                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 9, color: '#8b5cf6', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+                                {SARVAM_LANGS.find(l => l.code === transTargetLang)?.native} Translation
+                              </span>
+                              {transFallback && <span style={{ fontSize: 8, color: '#f59e0b', fontWeight: 700, background: 'rgba(245,158,11,.1)', padding: '2px 7px', borderRadius: 10 }}>AI Fallback</span>}
+                            </div>
+                            <div
+                              style={{
+                                flex: 1, minHeight: 107, background: transResult ? 'rgba(139,92,246,.06)' : 'rgba(255,255,255,.02)',
+                                border: `1px solid ${transResult ? 'rgba(139,92,246,.25)' : 'rgba(255,255,255,.06)'}`,
+                                borderRadius: 12, padding: '11px 13px', fontSize: 14, lineHeight: 1.8,
+                                color: transResult ? '#e2e8f0' : '#334155', fontStyle: transResult ? 'normal' : 'italic',
+                                overflowY: 'auto', direction: transTargetLang === 'ur-IN' ? 'rtl' : 'ltr',
+                              }}>
+                              {transError
+                                ? <span style={{ color: '#f87171', fontStyle: 'normal', fontSize: 12 }}>{transError}</span>
+                                : transLoading
+                                  ? <div style={{ display: 'flex', gap: 5, paddingTop: 4 }}>{[0,1,2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: '#8b5cf6', animation: 'pulse2 1.2s infinite', animationDelay: `${i*0.2}s` }} />)}</div>
+                                  : transResult || 'Translation will appear here…'
+                              }
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action buttons when translation is ready */}
+                        {transResult && !transLoading && (
+                          <div style={{ padding: '0 18px 16px', display: 'flex', gap: 8 }}>
+                            <button
+                              onClick={doTts}
+                              disabled={transTtsLoading}
+                              style={{ flex: 1, padding: '9px 0', background: 'rgba(139,92,246,.12)', border: '1px solid rgba(139,92,246,.25)', borderRadius: 10, color: '#a78bfa', fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                              {transTtsLoading
+                                ? <><div className="spin" style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(167,139,250,.3)', borderTopColor: '#a78bfa' }} /> Speaking…</>
+                                : '🔊 Read Aloud (Sarvam TTS)'}
+                            </button>
+                            <button
+                              onClick={() => navigator.clipboard?.writeText(transResult)}
+                              style={{ flex: 1, padding: '9px 0', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 10, color: '#64748b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                              ⎘ Copy Translation
+                            </button>
+                            <button
+                              onClick={() => {
+                                const blob = new Blob([`ORIGINAL (English):\n${transSourceText}\n\nTRANSLATION (${SARVAM_LANGS.find(l=>l.code===transTargetLang)?.label}):\n${transResult}`], { type: 'text/plain' });
+                                const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                                a.download = `translated-${transTargetLang}.txt`; a.click();
+                              }}
+                              style={{ flex: 1, padding: '9px 0', background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.18)', borderRadius: 10, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                              ↓ Save Translation
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-              <button style={{ padding: '15px 40px', background: '#6366f1', border: 'none', borderRadius: 15, color: '#fff', fontSize: 10, fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer' }}>Open Legal Scanner</button>
-              <p style={{ fontSize: 10, color: '#334155', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Requires camera permission</p>
+
+              {/* ── TRANSLATOR ── */}
+              <div style={{ borderTop: '2px solid rgba(255,255,255,.06)', background: '#020617' }}>
+                <div style={{ padding: '16px 26px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: '#f59e0b', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 3 }}>Powered by Sarvam AI · 11 Indian Languages</div>
+                    <h4 style={{ fontSize: 18, fontWeight: 900, fontStyle: 'italic', margin: 0 }}>Document <span style={{ color: '#475569', fontStyle: 'normal' }}>Translator</span></h4>
+                  </div>
+                  {convPages.length > 0 && (
+                    <button onClick={useScannedTextForTranslation}
+                      style={{ padding: '7px 16px', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.25)', borderRadius: 10, color: '#f59e0b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                      ↑ Use Scanned Text
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 0, minHeight: 220 }}>
+
+                  {/* Source text */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px 16px 26px' }}>
+                    <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      Source Text (English)
+                      <span style={{ color: '#334155', fontSize: 8 }}>{transSourceText.length}/2000</span>
+                    </div>
+                    <textarea
+                      value={transSourceText}
+                      onChange={e => { setTransSourceText(e.target.value.slice(0, 2000)); setTransResult(''); }}
+                      placeholder="Paste or type English text here, or use ↑ Use Scanned Text above…"
+                      style={{ flex: 1, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 12, padding: '12px 14px', fontSize: 12, color: '#cbd5e1', lineHeight: 1.7, resize: 'none', minHeight: 140, fontFamily: 'inherit' }}
+                    />
+                  </div>
+
+                  {/* Middle controls */}
+                  <div style={{ width: 160, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '12px 8px', flexShrink: 0 }}>
+                    {/* Language selector */}
+                    <div style={{ width: '100%' }}>
+                      <div style={{ fontSize: 8, color: '#475569', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 5, textAlign: 'center' }}>Translate to</div>
+                      <select
+                        value={transTargetLang}
+                        onChange={e => { setTransTargetLang(e.target.value); setTransResult(''); }}
+                        style={{ width: '100%', background: '#0a0f1d', border: '1px solid rgba(255,255,255,.1)', borderRadius: 10, padding: '8px 10px', fontSize: 12, color: '#e2e8f0', cursor: 'pointer' }}>
+                        {SARVAM_LANGS.map(l => (
+                          <option key={l.code} value={l.code}>{l.native} — {l.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Translate button */}
+                    <button
+                      onClick={doTranslate}
+                      disabled={transLoading || !transSourceText.trim()}
+                      style={{ width: '100%', padding: '10px 0', background: transLoading || !transSourceText.trim() ? 'rgba(245,158,11,.2)' : '#f59e0b', border: 'none', borderRadius: 11, color: transLoading || !transSourceText.trim() ? '#64748b' : '#000', fontSize: 10, fontWeight: 900, cursor: transLoading || !transSourceText.trim() ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'all .2s' }}>
+                      {transLoading
+                        ? <><div className="spin" style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(0,0,0,.2)', borderTopColor: '#000' }} /> Translating…</>
+                        : '⟶ Translate'}
+                    </button>
+
+                    {transFallback && (
+                      <div style={{ fontSize: 8, color: '#f59e0b', textAlign: 'center', opacity: .7, lineHeight: 1.4 }}>
+                        ⚠ Sarvam unavailable<br/>Used AI fallback
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Translated output */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 26px 16px 16px' }}>
+                    <div style={{ fontSize: 9, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {SARVAM_LANGS.find(l => l.code === transTargetLang)?.native} — {SARVAM_LANGS.find(l => l.code === transTargetLang)?.label}
+                      {transResult && (
+                        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                          <button onClick={doTts} disabled={transTtsLoading}
+                            style={{ padding: '3px 10px', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 8, color: '#10b981', fontSize: 9, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {transTtsLoading ? <div className="spin" style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(16,185,129,.3)', borderTopColor: '#10b981' }} /> : '▶'} Read
+                          </button>
+                          <button onClick={() => navigator.clipboard?.writeText(transResult)}
+                            style={{ padding: '3px 10px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 8, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>
+                            ⎘ Copy
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ flex: 1, background: 'rgba(245,158,11,.03)', border: `1px solid ${transResult ? 'rgba(245,158,11,.15)' : 'rgba(255,255,255,.07)'}`, borderRadius: 12, padding: '12px 14px', fontSize: 13, color: transResult ? '#fde68a' : '#334155', lineHeight: 1.85, minHeight: 140, whiteSpace: 'pre-wrap', overflowY: 'auto', fontStyle: transResult ? 'normal' : 'italic', transition: 'all .3s' }}>
+                      {transLoading
+                        ? <div style={{ display: 'flex', gap: 5, padding: '4px 0' }}>{[0,1,2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', animation: 'pulse2 1.2s infinite', animationDelay: `${i*0.2}s` }} />)}</div>
+                        : transError
+                          ? <span style={{ color: '#f87171' }}>{transError}</span>
+                          : transResult || 'Translation will appear here…'
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick language chips */}
+                <div style={{ padding: '8px 26px 18px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 8, color: '#334155', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', alignSelf: 'center', marginRight: 4 }}>Quick:</span>
+                  {SARVAM_LANGS.map(l => (
+                    <button key={l.code} onClick={() => { setTransTargetLang(l.code); setTransResult(''); }}
+                      style={{ padding: '4px 12px', borderRadius: 20, background: transTargetLang === l.code ? 'rgba(245,158,11,.15)' : 'rgba(255,255,255,.03)', border: `1px solid ${transTargetLang === l.code ? 'rgba(245,158,11,.35)' : 'rgba(255,255,255,.07)'}`, color: transTargetLang === l.code ? '#f59e0b' : '#475569', fontSize: 11, fontWeight: 700, cursor: 'pointer', transition: 'all .15s' }}>
+                      {l.native}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1278,18 +2358,84 @@ export default function AdvocatePortal() {
 
         </main>
 
-        {/* Hardware Dock */}
-        <div style={{ position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 100, pointerEvents: 'none' }}>
-          <div style={{ background: 'rgba(0,0,0,.9)', backdropFilter: 'blur(20px)', padding: '10px 18px', borderRadius: 38, border: '1px solid rgba(255,255,255,.1)', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.8)' }}>
-            {[['cam', "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z", camOn, setCamOn], ['mic', "M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z", micOn, setMicOn]].map(([id, path, on, setter]) => (
-              <button key={id} onClick={() => setter(v => !v)} style={{ width: 48, height: 48, borderRadius: '50%', background: on ? '#6366f1' : id === 'mic' ? 'rgba(239,68,68,.1)' : 'rgba(255,255,255,.05)', border: `2px solid ${on ? '#818cf8' : id === 'mic' ? 'rgba(239,68,68,.2)' : 'rgba(255,255,255,.1)'}`, color: on ? '#fff' : id === 'mic' ? '#ef4444' : '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all .3s', boxShadow: on ? '0 0 20px rgba(99,102,241,.5)' : 'none', transform: on ? 'scale(1.1)' : 'scale(1)' }}>
-                <Icon path={path} size={18} />
-              </button>
-            ))}
+        {/* ── Nexus Voice AI Dock ── */}
+        <div style={{ position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 100, pointerEvents: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+
+          {/* Voice status bubble — shown when active */}
+          {voiceAiOn && (
+            <div className="fade-up" style={{ background: 'rgba(0,0,0,.92)', backdropFilter: 'blur(20px)', border: `1px solid ${voiceAiListening ? 'rgba(239,68,68,.4)' : voiceAiThinking ? 'rgba(245,158,11,.4)' : voiceAiSpeaking ? 'rgba(99,102,241,.5)' : 'rgba(255,255,255,.1)'}`, borderRadius: 20, padding: '10px 18px', maxWidth: 420, minWidth: 260, pointerEvents: 'auto', boxShadow: '0 10px 40px rgba(0,0,0,.7)', transition: 'border-color .3s' }}>
+
+              {/* Status row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: voiceAiTranscript || voiceAiReply ? 8 : 0 }}>
+                <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                  {voiceAiListening
+                    ? [0,1,2,3].map(i => <div key={i} style={{ width: 3, background: '#ef4444', borderRadius: 2, animation: `waveBar .5s ease-in-out infinite alternate`, animationDelay: `${i*0.1}s`, height: `${10 + Math.random()*12}px` }} />)
+                    : voiceAiThinking
+                      ? [0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', animation: 'pulse2 1.2s infinite', animationDelay: `${i*0.2}s` }} />)
+                      : voiceAiSpeaking
+                        ? [0,1,2,3,4].map(i => <div key={i} style={{ width: 3, background: '#818cf8', borderRadius: 2, animation: `waveBar .4s ease-in-out infinite alternate`, animationDelay: `${i*0.08}s`, height: `${8 + Math.random()*16}px` }} />)
+                        : <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
+                  }
+                </div>
+                <span style={{ fontSize: 10, fontWeight: 900, color: voiceAiListening ? '#ef4444' : voiceAiThinking ? '#f59e0b' : voiceAiSpeaking ? '#818cf8' : '#10b981', letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+                  {voiceAiListening ? 'Listening…' : voiceAiThinking ? 'Thinking…' : voiceAiSpeaking ? 'Speaking…' : 'Ready — say a command'}
+                </span>
+                {!voiceAiListening && !voiceAiThinking && !voiceAiSpeaking && (
+                  <button onClick={startDockListening} style={{ marginLeft: 'auto', padding: '3px 10px', background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.25)', borderRadius: 20, color: '#f87171', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>
+                    🎙 Tap to speak
+                  </button>
+                )}
+              </div>
+
+              {/* Transcript */}
+              {voiceAiTranscript && (
+                <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4, fontStyle: 'italic' }}>
+                  You: "{voiceAiTranscript}"
+                </div>
+              )}
+
+              {/* AI reply */}
+              {voiceAiReply && (
+                <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.6, borderTop: '1px solid rgba(255,255,255,.06)', paddingTop: 8 }}>
+                  {voiceAiReply.length > 160 ? voiceAiReply.slice(0, 157) + '…' : voiceAiReply}
+                </div>
+              )}
+
+              {/* Command hints */}
+              {!voiceAiTranscript && !voiceAiListening && !voiceAiThinking && (
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.05)' }}>
+                  {['"Go to Consult"', '"Open Clients"', '"Start camera"', '"What is IPC 302?"', '"Add instruction…"'].map(hint => (
+                    <span key={hint} style={{ fontSize: 9, color: '#334155', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 20, padding: '2px 8px', fontWeight: 600 }}>{hint}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Main dock pill */}
+          <div style={{ background: 'rgba(0,0,0,.92)', backdropFilter: 'blur(20px)', padding: '10px 18px', borderRadius: 38, border: '1px solid rgba(255,255,255,.1)', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.8)' }}>
+
+            {/* Camera button */}
+            <button onClick={() => { setCamOn(v => !v); if (!camOn) { setView('doc-converter'); setTimeout(() => convStartCamera(), 500); } else { convStopCamera(); } }}
+              title="Open Document Converter camera"
+              style={{ width: 48, height: 48, borderRadius: '50%', background: camOn ? '#6366f1' : 'rgba(255,255,255,.05)', border: `2px solid ${camOn ? '#818cf8' : 'rgba(255,255,255,.1)'}`, color: camOn ? '#fff' : '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all .3s', boxShadow: camOn ? '0 0 20px rgba(99,102,241,.5)' : 'none', transform: camOn ? 'scale(1.1)' : 'scale(1)' }}>
+              <Icon path="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" size={18} />
+            </button>
+
+            {/* Mic / Voice AI button */}
+            <button onClick={toggleVoiceAi}
+              title={voiceAiOn ? 'Turn off Voice AI' : 'Activate Nexus Voice AI'}
+              style={{ width: 48, height: 48, borderRadius: '50%', background: voiceAiOn ? (voiceAiListening ? '#ef4444' : '#6366f1') : 'rgba(239,68,68,.1)', border: `2px solid ${voiceAiOn ? (voiceAiListening ? '#f87171' : '#818cf8') : 'rgba(239,68,68,.2)'}`, color: voiceAiOn ? '#fff' : '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all .3s', boxShadow: voiceAiOn ? `0 0 20px ${voiceAiListening ? 'rgba(239,68,68,.6)' : 'rgba(99,102,241,.5)'}` : 'none', transform: voiceAiOn ? 'scale(1.1)' : 'scale(1)' }}>
+              <Icon path="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" size={18} />
+            </button>
+
             <div style={{ width: 1, height: 30, background: 'rgba(255,255,255,.1)' }} />
+
             <div style={{ padding: '0 10px' }}>
               <div style={{ fontSize: 9, fontWeight: 900, color: '#6366f1', letterSpacing: '0.3em', textTransform: 'uppercase' }}>Nexus Link</div>
-              <div style={{ fontSize: 8, fontWeight: 700, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 2 }}>{micOn || camOn ? 'UPLINK STABLE' : 'OFFLINE'}</div>
+              <div style={{ fontSize: 8, fontWeight: 700, color: voiceAiOn ? '#10b981' : '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 2, transition: 'color .3s' }}>
+                {voiceAiOn ? (voiceAiListening ? '● LISTENING' : voiceAiThinking ? '● THINKING' : voiceAiSpeaking ? '● SPEAKING' : '● READY') : 'OFFLINE'}
+              </div>
             </div>
           </div>
         </div>
