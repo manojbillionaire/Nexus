@@ -426,6 +426,9 @@ export default function AdvocatePortal() {
     canvas.height = video.videoHeight || 720;
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    // Stop stream immediately after capture so camera light turns off
+    if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
+    if (convVideoRef.current) { convVideoRef.current.srcObject = null; }
     setConvProgress(30);
     try {
       if (!window.Tesseract) {
@@ -442,20 +445,33 @@ export default function AdvocatePortal() {
       const text = result.data.text.trim();
       setConvPages(p => [...p, { dataUrl, text, id: Date.now() }]);
       setConvProgress(100);
-      setConvPhase('live'); // ready for next page
+      setConvPhase('done'); // go to done after each page capture — user can add more or analyse
+      setCamOn(false);
     } catch (e) {
-      setConvError('OCR failed: ' + e.message); setConvPhase('error');
+      setConvError('OCR failed: ' + e.message); setConvPhase('error'); setCamOn(false);
     }
   };
 
   const convStopCamera = () => {
     if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
-    if (convVideoRef.current) convVideoRef.current.srcObject = null;
+    if (convVideoRef.current) { convVideoRef.current.srcObject = null; convVideoRef.current.load(); }
+    // Only reset to idle if not already in done state (preserve captured pages)
+    setConvPhase(p => (p === 'done' ? 'done' : 'idle'));
+    setCamOn(false);
   };
 
-  const convReset = () => { convStopCamera(); setConvPhase('idle'); setConvPages([]); setConvError(''); setConvAiSummary(''); setConvProgress(0); };
+  const convReset = () => {
+    if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
+    if (convVideoRef.current) { convVideoRef.current.srcObject = null; convVideoRef.current.load(); }
+    setConvPhase('idle'); setConvPages([]); setConvError(''); setConvAiSummary(''); setConvProgress(0); setCamOn(false);
+  };
 
-  const convFinish = () => { convStopCamera(); setConvPhase('done'); };
+  const convFinish = () => {
+    // Stop camera but keep pages and go to done state for analysis
+    if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
+    if (convVideoRef.current) { convVideoRef.current.srcObject = null; convVideoRef.current.load(); }
+    setConvPhase('done'); setCamOn(false);
+  };
 
   const convAiAnalyse = async () => {
     if (!convPages.length) return;
@@ -480,8 +496,20 @@ export default function AdvocatePortal() {
     a.download = 'converted-document.txt'; a.click();
   };
 
-  // Stop converter camera when leaving view
-  useEffect(() => { if (view !== 'doc-converter') convStopCamera(); }, [view]);
+  // Auto-trigger AI analysis when pages are captured and phase is done
+  useEffect(() => {
+    if (convPhase === 'done' && convPages.length > 0 && !convAiSummary && !convAiLoading) {
+      convAiAnalyse();
+    }
+  }, [convPhase, convPages.length]);
+    if (view !== 'doc-converter') {
+      if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
+      if (convVideoRef.current) { convVideoRef.current.srcObject = null; }
+      // Reset phase if it was live/starting (keep 'done' so pages aren't lost)
+      setConvPhase(p => (p === 'live' || p === 'starting' || p === 'processing') ? 'idle' : p);
+      setCamOn(false);
+    }
+  }, [view]);
 
   // ── Real Camera + OCR ──
   const startScan = async () => {
@@ -517,6 +545,12 @@ export default function AdvocatePortal() {
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // Stop the camera stream now — frame is captured
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
     setScanProgress(25);
     try {
       // Load Tesseract from CDN dynamically
@@ -551,22 +585,38 @@ export default function AdvocatePortal() {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+      videoRef.current.load();
+    }
     setScanPhase('idle');
     setScanProgress(0);
     setScanError('');
+    setScannedText('');
   };
 
   const rescan = () => {
     setScannedText('');
-    setScanPhase('live');
     setScanProgress(0);
     setScanError('');
+    if (streamRef.current && streamRef.current.active) {
+      if (videoRef.current && !videoRef.current.srcObject) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch(() => {});
+      }
+      setScanPhase('live');
+    } else {
+      startScan();
+    }
   };
 
   // Stop camera when leaving reading-room view
   useEffect(() => {
-    if (view !== 'reading-room') stopScan();
+    if (view !== 'reading-room') {
+      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+      if (videoRef.current) { videoRef.current.srcObject = null; }
+      setScanPhase('idle');
+    }
   }, [view]);
 
   // ── Markdown Renderer ──
@@ -995,30 +1045,52 @@ export default function AdvocatePortal() {
                 </div>
               </div>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
-                <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Nexus AI Legal Engine</div>
-                  <h3 style={{ fontSize: 22, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', marginBottom: 14 }}>Consultation<span style={{ color: '#475569', fontStyle: 'normal' }}> Console</span></h3>
-                  <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
-                    {chatHistory.length === 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, opacity: .4 }}>
-                        <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" size={40} strokeWidth={1.5} />
-                        <p style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>Begin legal consultation</p>
+                {/* Quick-action cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <button onClick={() => setView('consult')} style={{ ...S.card, textAlign: 'left', border: '1px solid rgba(99,102,241,.25)', cursor: 'pointer', background: 'rgba(99,102,241,.06)', transition: 'all .2s' }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor='rgba(99,102,241,.5)'}
+                    onMouseLeave={e => e.currentTarget.style.borderColor='rgba(99,102,241,.25)'}>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(99,102,241,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1', marginBottom: 12 }}>
+                      <Icon path="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" size={20} />
+                    </div>
+                    <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 4 }}>AI Legal Engine</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: '-0.02em', marginBottom: 6 }}>Open Consult</div>
+                    <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.5 }}>Discuss case strategy, legal sections & petition drafts with AI.</div>
+                    <div style={{ marginTop: 12, fontSize: 10, color: '#6366f1', fontWeight: 700 }}>→ Go to Consult</div>
+                  </button>
+                  <button onClick={() => setView('writing-desk')} style={{ ...S.card, textAlign: 'left', border: '1px solid rgba(16,185,129,.2)', cursor: 'pointer', background: 'rgba(16,185,129,.04)', transition: 'all .2s' }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor='rgba(16,185,129,.4)'}
+                    onMouseLeave={e => e.currentTarget.style.borderColor='rgba(16,185,129,.2)'}>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(16,185,129,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981', marginBottom: 12 }}>
+                      <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" size={20} />
+                    </div>
+                    <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 4 }}>Writing Desk</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: '-0.02em', marginBottom: 6 }}>Draft Document</div>
+                    <div style={{ fontSize: 11, color: '#475569', lineHeight: 1.5 }}>Open the AI writing desk to draft plaints, petitions & notices.</div>
+                    <div style={{ marginTop: 12, fontSize: 10, color: '#10b981', fontWeight: 700 }}>→ Open Writing Desk</div>
+                  </button>
+                </div>
+                {/* Recent Consultations summary */}
+                <div style={{ ...S.card, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                    <div style={{ fontSize: 9, color: '#f59e0b', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase' }}>Recent Consultations</div>
+                    <button onClick={() => setView('consult')} style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, background: 'none', border: 'none', cursor: 'pointer', letterSpacing: '0.1em' }}>VIEW ALL →</button>
+                  </div>
+                  <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {chatHistory.length === 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, opacity: .35 }}>
+                        <Icon path="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" size={36} strokeWidth={1.5} />
+                        <p style={{ fontSize: 12, color: '#475569', fontWeight: 700, textAlign: 'center' }}>No consultations yet.<br/>Use mic or camera to start.</p>
                       </div>
-                    )}
-                    {chatHistory.map(msg => (
-                      <div key={msg.id} className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                        <div style={{ maxWidth: '80%', padding: '11px 15px', borderRadius: msg.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.25)' : 'rgba(255,255,255,.06)'}`, fontSize: 13, lineHeight: 1.6, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}
-                          dangerouslySetInnerHTML={msg.role === 'ai' ? { __html: renderMarkdown(msg.text) } : undefined}
-                        >{msg.role === 'user' ? msg.text : undefined}</div>
+                    ) : chatHistory.filter(m => m.role === 'ai').slice(-3).map(msg => (
+                      <div key={msg.id} onClick={() => setView('consult')} style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '11px 14px', border: '1px solid rgba(255,255,255,.05)', cursor: 'pointer', transition: 'border-color .2s' }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor='rgba(99,102,241,.25)'}
+                        onMouseLeave={e => e.currentTarget.style.borderColor='rgba(255,255,255,.05)'}>
+                        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.6, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.text.slice(0, 180)) }} />
+                        <div style={{ fontSize: 9, color: '#334155', marginTop: 6, fontWeight: 700 }}>AI · Click to view in Consult →</div>
                       </div>
                     ))}
-                    {consoleLoading && <div style={{ display: 'flex', gap: 5, padding: '11px 15px', width: 'fit-content', background: 'rgba(255,255,255,.04)', borderRadius: '18px 18px 18px 4px' }}>
-                      {[0, 1, 2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#475569', animation: 'pulse2 1.2s infinite', animationDelay: `${i * 0.2}s` }} />)}
-                    </div>}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections…" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: '11px 15px', fontSize: 13 }} />
-                    <button onClick={sendConsult} style={{ padding: '11px 20px', background: '#6366f1', border: 'none', borderRadius: 12, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
                   </div>
                 </div>
               </div>
@@ -1081,6 +1153,30 @@ export default function AdvocatePortal() {
                   <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600 }}>{activeInstructions.length} temporary instruction{activeInstructions.length > 1 ? 's' : ''} active — AI will follow them automatically.</span>
                 </div>
               )}
+              {/* Camera/Mic status bar — shown when active */}
+              {(camOn || voiceAiOn) && (
+                <div className="fade-up" style={{ background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 12, padding: '10px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                  {camOn && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#6366f1', animation: 'pulse2 1s infinite' }} />
+                      <span style={{ fontSize: 10, color: '#818cf8', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase' }}>Camera Active</span>
+                      <button onClick={() => { setCamOn(false); convStopCamera(); }} style={{ marginLeft: 4, fontSize: 9, color: '#ef4444', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 8, padding: '2px 8px', cursor: 'pointer', fontWeight: 700 }}>Stop</button>
+                    </div>
+                  )}
+                  {camOn && voiceAiOn && <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,.1)' }} />}
+                  {voiceAiOn && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: voiceAiListening ? '#ef4444' : '#10b981', animation: 'pulse2 .8s infinite' }} />
+                      <span style={{ fontSize: 10, color: voiceAiListening ? '#f87171' : '#10b981', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+                        {voiceAiListening ? 'Mic Listening…' : voiceAiThinking ? 'AI Thinking…' : voiceAiSpeaking ? 'AI Speaking…' : 'Mic Ready'}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ marginLeft: 'auto', fontSize: 10, color: '#334155', fontWeight: 700 }}>
+                    {camOn && voiceAiOn ? 'Camera & mic active — consultation in progress' : camOn ? 'Camera active — capture document or ask AI about what you see' : 'Voice AI active — speak to ask legal questions'}
+                  </div>
+                </div>
+              )}
               <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
                   <div>
@@ -1118,7 +1214,7 @@ export default function AdvocatePortal() {
                   </div>}
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections, petition drafts…" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 14, padding: '13px 18px', fontSize: 13 }} />
+                  <input data-consult-input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections, petition drafts…" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 14, padding: '13px 18px', fontSize: 13 }} />
                   <button onClick={sendConsult} style={{ padding: '13px 22px', background: '#6366f1', border: 'none', borderRadius: 14, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
                 </div>
               </div>
@@ -1409,8 +1505,8 @@ export default function AdvocatePortal() {
                     {/* Video viewport */}
                     <div style={{ position: 'relative', background: '#050810', minHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
 
-                      {/* Hidden canvas used for OCR capture only */}
-                      <canvas ref={canvasRef} style={{ display: scanPhase === 'done' ? 'block' : 'none', width: '100%', objectFit: 'cover', minHeight: 280 }} />
+                      {/* Hidden canvas used for OCR capture only — shown as preview after capture */}
+                      <canvas ref={canvasRef} style={{ display: scanPhase === 'done' ? 'block' : 'none', width: '100%', height: '100%', objectFit: 'cover', minHeight: 280, position: scanPhase === 'done' ? 'relative' : 'absolute', opacity: scanPhase === 'done' ? 1 : 0 }} />
 
                       {/* Idle state */}
                       {(scanPhase === 'idle' || scanPhase === 'error') && (
@@ -1549,7 +1645,7 @@ export default function AdvocatePortal() {
                       }
                     </div>
                     {scanPhase === 'done' && scannedText && (
-                      <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,.05)' }}>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,.05)', flexWrap: 'wrap' }}>
                         <button
                           onClick={() => {
                             if (window.speechSynthesis.speaking) { window.speechSynthesis.cancel(); return; }
@@ -1573,6 +1669,14 @@ export default function AdvocatePortal() {
                           }}
                           style={{ flex: 1, padding: '9px 0', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 11, color: '#f59e0b', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
                           ↓ Save TXT
+                        </button>
+                        <button
+                          onClick={() => {
+                            setConsoleInput('I have scanned a legal document. Here is the extracted text:\n\n' + scannedText.slice(0, 2500) + '\n\nPlease analyse this document and advise on legal implications.');
+                            setView('consult');
+                          }}
+                          style={{ flex: '0 0 100%', padding: '10px 0', background: 'rgba(99,102,241,.12)', border: '1px solid rgba(99,102,241,.3)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 14 }}>⚡</span> Ask AI about this document → Open Consult
                         </button>
                       </div>
                     )}
@@ -1700,9 +1804,14 @@ export default function AdvocatePortal() {
                       </button>
                     )}
                     {convPhase === 'done' && (
-                      <button onClick={convStartCamera} style={{ flex: 1, padding: '10px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
-                        + Add More Pages
-                      </button>
+                      <>
+                        <button onClick={() => { setConvPhase('idle'); convStartCamera(); }} style={{ flex: 1, padding: '10px 0', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 11, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          + Add More Pages
+                        </button>
+                        <button onClick={convReset} style={{ flex: 1, padding: '10px 0', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 11, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ✕ Reset All
+                        </button>
+                      </>
                     )}
                   </div>
 
@@ -2415,16 +2524,16 @@ export default function AdvocatePortal() {
           {/* Main dock pill */}
           <div style={{ background: 'rgba(0,0,0,.92)', backdropFilter: 'blur(20px)', padding: '10px 18px', borderRadius: 38, border: '1px solid rgba(255,255,255,.1)', display: 'flex', alignItems: 'center', gap: 10, pointerEvents: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.8)' }}>
 
-            {/* Camera button */}
-            <button onClick={() => { setCamOn(v => !v); if (!camOn) { setView('doc-converter'); setTimeout(() => convStartCamera(), 500); } else { convStopCamera(); } }}
-              title="Open Document Converter camera"
+            {/* Camera button — opens Consult */}
+            <button onClick={() => { setCamOn(v => !v); setView('consult'); if (!camOn) { setTimeout(() => convStartCamera(), 500); } else { convStopCamera(); } }}
+              title="Open Consult (camera)"
               style={{ width: 48, height: 48, borderRadius: '50%', background: camOn ? '#6366f1' : 'rgba(255,255,255,.05)', border: `2px solid ${camOn ? '#818cf8' : 'rgba(255,255,255,.1)'}`, color: camOn ? '#fff' : '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all .3s', boxShadow: camOn ? '0 0 20px rgba(99,102,241,.5)' : 'none', transform: camOn ? 'scale(1.1)' : 'scale(1)' }}>
               <Icon path="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" size={18} />
             </button>
 
-            {/* Mic / Voice AI button */}
-            <button onClick={toggleVoiceAi}
-              title={voiceAiOn ? 'Turn off Voice AI' : 'Activate Nexus Voice AI'}
+            {/* Mic / Voice AI button — opens Consult */}
+            <button onClick={() => { toggleVoiceAi(); setView('consult'); }}
+              title={voiceAiOn ? 'Turn off Voice AI' : 'Activate Nexus Voice AI — opens Consult'}
               style={{ width: 48, height: 48, borderRadius: '50%', background: voiceAiOn ? (voiceAiListening ? '#ef4444' : '#6366f1') : 'rgba(239,68,68,.1)', border: `2px solid ${voiceAiOn ? (voiceAiListening ? '#f87171' : '#818cf8') : 'rgba(239,68,68,.2)'}`, color: voiceAiOn ? '#fff' : '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all .3s', boxShadow: voiceAiOn ? `0 0 20px ${voiceAiListening ? 'rgba(239,68,68,.6)' : 'rgba(99,102,241,.5)'}` : 'none', transform: voiceAiOn ? 'scale(1.1)' : 'scale(1)' }}>
               <Icon path="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" size={18} />
             </button>
