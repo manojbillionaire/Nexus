@@ -502,6 +502,9 @@ export default function AdvocatePortal() {
       convAiAnalyse();
     }
   }, [convPhase, convPages.length]);
+
+  // Stop converter camera when leaving view
+  useEffect(() => {
     if (view !== 'doc-converter') {
       if (convStreamRef.current) { convStreamRef.current.getTracks().forEach(t => t.stop()); convStreamRef.current = null; }
       if (convVideoRef.current) { convVideoRef.current.srcObject = null; }
