@@ -52,6 +52,18 @@ export default function AdvocatePortal() {
   const [clients, setClients] = useState(CLIENTS);
   const [addingClient, setAddingClient] = useState(false);
   const [newClient, setNewClient] = useState({});
+  // ── Client Documents ──
+  const [clientDocs, setClientDocs] = useState({}); // { slNo: [{id, name, size, type, dataUrl, uploadedAt}] }
+  const [clientDocsModal, setClientDocsModal] = useState(null); // client object or null
+  const [docsUploadMode, setDocsUploadMode] = useState('file'); // 'file' | 'camera'
+  const [docsCamPhase, setDocsCamPhase] = useState('idle'); // idle | starting | live | capturing | done | error
+  const [docsCamError, setDocsCamError] = useState('');
+  const docsCamVideoRef = useRef(null);
+  const docsCamCanvasRef = useRef(null);
+  const docsCamStreamRef = useRef(null);
+  const docsFileInputRef = useRef(null);
+  const [docsDragOver, setDocsDragOver] = useState(false);
+  const [docsDeleteTarget, setDocsDeleteTarget] = useState(null); // {clientSlNo, docId, docName}
   const [chatHistory, setChatHistory] = useState([]);
   // ── Voice History Records (in-session only — advocate saves to Google Drive manually) ──
   const [voiceRecords, setVoiceRecords] = useState(VOICE_RECORDS);
@@ -491,7 +503,9 @@ export default function AdvocatePortal() {
     try {
       const res = await api.post('/api/ai/consult', {
         message: `Analyse this scanned legal document and provide: 1) Document type, 2) Key parties involved, 3) Main legal issues, 4) Important dates/sections, 5) Recommended next steps.\n\nDocument text:\n${fullText.slice(0, 3000)}`,
-        history: []
+        history: [],
+        languageInstruction: LANGUAGE_SYSTEM_INSTRUCTION,
+        detectedLanguage: 'auto',
       });
       setConvAiSummary(res.data.reply);
     } catch {
@@ -669,7 +683,44 @@ export default function AdvocatePortal() {
     return html;
   };
 
-  // ── Voice AI Engine ──
+  // ── Language auto-detection ──
+  const [detectedLang, setDetectedLang] = useState(null); // { code, label, flag }
+  const LANG_PATTERNS = [
+    { code: 'ml', label: 'Malayalam', flag: '🇮🇳', pattern: /[\u0D00-\u0D7F]/ },
+    { code: 'hi', label: 'Hindi',     flag: '🇮🇳', pattern: /[\u0900-\u097F]/ },
+    { code: 'ta', label: 'Tamil',     flag: '🇮🇳', pattern: /[\u0B80-\u0BFF]/ },
+    { code: 'te', label: 'Telugu',    flag: '🇮🇳', pattern: /[\u0C00-\u0C7F]/ },
+    { code: 'kn', label: 'Kannada',   flag: '🇮🇳', pattern: /[\u0C80-\u0CFF]/ },
+    { code: 'bn', label: 'Bengali',   flag: '🇧🇩', pattern: /[\u0980-\u09FF]/ },
+    { code: 'gu', label: 'Gujarati',  flag: '🇮🇳', pattern: /[\u0A80-\u0AFF]/ },
+    { code: 'pa', label: 'Punjabi',   flag: '🇮🇳', pattern: /[\u0A00-\u0A7F]/ },
+    { code: 'mr', label: 'Marathi',   flag: '🇮🇳', pattern: /[\u0900-\u097F]/ },
+    { code: 'ar', label: 'Arabic',    flag: '🇦🇪', pattern: /[\u0600-\u06FF]/ },
+    { code: 'zh', label: 'Chinese',   flag: '🇨🇳', pattern: /[\u4E00-\u9FFF]/ },
+    { code: 'ja', label: 'Japanese',  flag: '🇯🇵', pattern: /[\u3040-\u30FF]/ },
+    { code: 'ko', label: 'Korean',    flag: '🇰🇷', pattern: /[\uAC00-\uD7AF]/ },
+    { code: 'ru', label: 'Russian',   flag: '🇷🇺', pattern: /[\u0400-\u04FF]/ },
+    { code: 'fr', label: 'French',    flag: '🇫🇷', pattern: /\b(bonjour|merci|oui|non|je|vous|nous|est|que|pour|avec|dans|les|des|une|mon|ton|son)\b/i },
+    { code: 'es', label: 'Spanish',   flag: '🇪🇸', pattern: /\b(hola|gracias|sí|no|como|para|con|que|por|los|las|una|mi|su|tu|también)\b/i },
+    { code: 'de', label: 'German',    flag: '🇩🇪', pattern: /\b(ich|sie|ein|eine|und|ist|das|der|die|den|mit|auf|für|nicht|aber)\b/i },
+  ];
+  const detectLanguage = (text) => {
+    if (!text || text.trim().length < 3) return null;
+    for (const lang of LANG_PATTERNS) {
+      if (lang.pattern.test(text)) return lang;
+    }
+    return { code: 'en', label: 'English', flag: '🌐' };
+  };
+
+  // Language instruction injected into every AI call
+  const LANGUAGE_SYSTEM_INSTRUCTION = `CRITICAL LANGUAGE RULE — READ THIS FIRST BEFORE EVERY RESPONSE:
+1. Carefully detect the language of the user's message.
+2. Reply ENTIRELY in that same language — not in English unless the user wrote in English.
+3. If the user writes in Malayalam, reply fully in Malayalam (including legal terms translated or explained in Malayalam).
+4. If the user writes in Hindi, reply fully in Hindi. If Tamil, reply in Tamil. If Arabic, reply in Arabic. And so on for any language.
+5. Legal section numbers (e.g. IPC 302, CPC Order XXXIX) may be kept as-is, but all explanations must be in the user's language.
+6. Do NOT switch back to English mid-response. Stay in the detected language throughout.
+7. If the message is mixed (e.g. English + Malayalam), default to the non-English language for your response.`;
   const cleanForSpeech = (text) => {
     return text
       .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -770,7 +821,14 @@ export default function AdvocatePortal() {
       // Ask real AI
       try {
         const history = voiceAiLog.slice(-6).map(m => ({ role: m.role, text: m.text }));
-        const res = await api.post('/api/ai/consult', { message: transcript, history });
+        const lang = detectLanguage(transcript);
+        if (lang) setDetectedLang(lang);
+        const res = await api.post('/api/ai/consult', {
+          message: transcript,
+          history,
+          languageInstruction: LANGUAGE_SYSTEM_INSTRUCTION,
+          detectedLanguage: lang?.label || 'auto',
+        });
         replyText = res.data.reply;
         // Also populate consult tab
         setChatHistory(h => [...h,
@@ -840,6 +898,9 @@ export default function AdvocatePortal() {
   const sendConsult = async () => {
     if (!consoleInput.trim() || consoleLoading) return;
     const text = consoleInput.trim(); setConsoleInput('');
+    // Detect language from user input and update indicator
+    const lang = detectLanguage(text);
+    if (lang) setDetectedLang(lang);
     const userMsg = { role: 'user', text, id: Date.now() };
     setChatHistory(h => [...h, userMsg]);
     setConsoleLoading(true);
@@ -850,7 +911,8 @@ export default function AdvocatePortal() {
         history,
         callContext: activeCallRecord || null,
         tempInstructions: tempInstructions,
-        language: 'en',
+        languageInstruction: LANGUAGE_SYSTEM_INSTRUCTION,
+        detectedLanguage: lang?.label || 'auto',
       });
       setChatHistory(h => [...h, { role: 'ai', text: res.data.reply, id: Date.now() }]);
     } catch (e) {
@@ -1018,6 +1080,59 @@ export default function AdvocatePortal() {
     const content = draftPages.map((pg, i) => `=== PAGE ${i + 1} ===\n\n${pg}`).join('\n\n');
     gdriveSave('draft', content, `draft_${ts}_${draftPages.length}pages.txt`);
   };
+
+  // ── Client Docs: camera helpers ──
+  const docsCamStart = async () => {
+    setDocsCamError(''); setDocsCamPhase('starting');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false });
+      docsCamStreamRef.current = stream;
+      if (docsCamVideoRef.current) { docsCamVideoRef.current.srcObject = stream; await docsCamVideoRef.current.play(); }
+      setDocsCamPhase('live');
+    } catch { setDocsCamError('Camera access denied. Please allow camera permission.'); setDocsCamPhase('error'); }
+  };
+  const docsCamCapture = async () => {
+    if (!docsCamVideoRef.current || !docsCamCanvasRef.current) return;
+    setDocsCamPhase('capturing');
+    const video = docsCamVideoRef.current;
+    const canvas = docsCamCanvasRef.current;
+    canvas.width = video.videoWidth || 1280; canvas.height = video.videoHeight || 960;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (docsCamStreamRef.current) { docsCamStreamRef.current.getTracks().forEach(t => t.stop()); docsCamStreamRef.current = null; }
+    if (docsCamVideoRef.current) docsCamVideoRef.current.srcObject = null;
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    const ts = new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-');
+    const doc = { id: Date.now(), name: `photo_${ts}.jpg`, size: Math.round(dataUrl.length * 0.75 / 1024) + ' KB', type: 'image/jpeg', dataUrl, uploadedAt: new Date().toLocaleString() };
+    if (clientDocsModal) {
+      setClientDocs(prev => ({ ...prev, [clientDocsModal.slNo]: [...(prev[clientDocsModal.slNo] || []), doc] }));
+    }
+    setDocsCamPhase('done');
+  };
+  const docsCamStop = () => {
+    if (docsCamStreamRef.current) { docsCamStreamRef.current.getTracks().forEach(t => t.stop()); docsCamStreamRef.current = null; }
+    if (docsCamVideoRef.current) { docsCamVideoRef.current.srcObject = null; }
+    setDocsCamPhase('idle');
+  };
+  const docsHandleFiles = (files) => {
+    if (!clientDocsModal || !files?.length) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const doc = { id: Date.now() + Math.random(), name: file.name, size: file.size > 1024 * 1024 ? (file.size / 1024 / 1024).toFixed(1) + ' MB' : Math.round(file.size / 1024) + ' KB', type: file.type, dataUrl: e.target.result, uploadedAt: new Date().toLocaleString() };
+        setClientDocs(prev => ({ ...prev, [clientDocsModal.slNo]: [...(prev[clientDocsModal.slNo] || []), doc] }));
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+  const docsDeleteConfirmed = () => {
+    if (!docsDeleteTarget) return;
+    setClientDocs(prev => ({ ...prev, [docsDeleteTarget.clientSlNo]: (prev[docsDeleteTarget.clientSlNo] || []).filter(d => d.id !== docsDeleteTarget.docId) }));
+    setDocsDeleteTarget(null);
+  };
+  // Stop camera when modal closes
+  useEffect(() => {
+    if (!clientDocsModal) { docsCamStop(); setDocsCamPhase('idle'); setDocsCamError(''); setDocsUploadMode('file'); }
+  }, [clientDocsModal]);
 
   // Load Drive status on mount
   useEffect(() => { gdriveCheckStatus(); }, []);
@@ -1642,6 +1757,10 @@ export default function AdvocatePortal() {
                             Drive RAG Active
                           </div>
                         )}
+                        <div style={{ padding: '5px 10px', background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 20, fontSize: 9, color: detectedLang ? '#a5b4fc' : '#334155', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, transition: 'all .3s' }}>
+                          {detectedLang ? <span>{detectedLang.flag}</span> : <span>🌐</span>}
+                          <span>{detectedLang ? detectedLang.label : 'Auto Language'}</span>
+                        </div>
                         {chatHistory.length > 0 && (
                           <button onClick={() => { setDeleteTargetMsg(null); setShowDeleteConsultModal(true); }}
                             title="Clear chat"
@@ -1779,9 +1898,39 @@ export default function AdvocatePortal() {
                         {[0, 1, 2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: '#475569', animation: 'pulse2 1.2s infinite', animationDelay: `${i * 0.2}s` }} />)}
                       </div>}
                     </div>
-                    <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
-                      <input data-consult-input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder={activeCallRecord ? `Ask about ${activeCallRecord.client}'s case, legal sections, strategy…` : 'Ask about case strategy, legal sections, petition drafts…'} style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 14, padding: '13px 18px', fontSize: 13 }} />
-                      <button onClick={sendConsult} style={{ padding: '13px 22px', background: '#6366f1', border: 'none', borderRadius: 14, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
+                    {/* Language indicator + input row */}
+                    <div style={{ flexShrink: 0 }}>
+                      {/* Live language detection bar */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, minHeight: 20 }}>
+                        {detectedLang ? (
+                          <div className="fade-up" style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 20 }}>
+                            <span style={{ fontSize: 12 }}>{detectedLang.flag}</span>
+                            <span style={{ fontSize: 9, fontWeight: 900, color: '#818cf8', letterSpacing: '0.1em', textTransform: 'uppercase' }}>{detectedLang.label} detected</span>
+                            <span style={{ fontSize: 9, color: '#334155' }}>· AI will reply in {detectedLang.label}</span>
+                            <button onClick={() => setDetectedLang(null)} style={{ background: 'none', border: 'none', color: '#334155', fontSize: 10, cursor: 'pointer', padding: '0 0 0 2px', lineHeight: 1 }}>✕</button>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 9, color: '#1e293b', fontWeight: 700, letterSpacing: '0.08em' }}>
+                            🌐 Type in any language — AI will auto-detect and reply in the same language
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <input
+                          data-consult-input
+                          value={consoleInput}
+                          onChange={e => {
+                            setConsoleInput(e.target.value);
+                            // Live detect as user types
+                            const lang = detectLanguage(e.target.value);
+                            if (lang && e.target.value.trim().length >= 4) setDetectedLang(lang);
+                          }}
+                          onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }}
+                          placeholder={activeCallRecord ? `Ask about ${activeCallRecord.client}'s case — in any language…` : 'Ask in any language — Malayalam, Hindi, Tamil, English…'}
+                          style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 14, padding: '13px 18px', fontSize: 13 }}
+                        />
+                        <button onClick={sendConsult} style={{ padding: '13px 22px', background: '#6366f1', border: 'none', borderRadius: 14, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1818,31 +1967,257 @@ export default function AdvocatePortal() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid rgba(255,255,255,.08)' }}>
-                      {['#', 'Client', 'Phone', 'Court', 'Case No.', 'Next Date', 'Purpose', 'Action'].map(h => (
+                      {['#', 'Client', 'Phone', 'Court', 'Case No.', 'Next Date', 'Purpose', 'Documents', 'Action'].map(h => (
                         <th key={h} style={{ paddingBottom: 11, paddingLeft: 13, textAlign: 'left', fontSize: 9, fontWeight: 900, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.15em', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {clients.map(c => (
-                      <tr key={c.slNo} style={{ borderBottom: '1px solid rgba(255,255,255,.04)' }}>
-                        <td style={{ padding: '13px', color: '#334155', fontSize: 12, fontWeight: 700 }}>{c.slNo}</td>
-                        <td style={{ padding: '13px' }}><div style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</div></td>
-                        <td style={{ padding: '13px', color: '#64748b', fontSize: 12 }}>{c.phone}</td>
-                        <td style={{ padding: '13px', color: '#64748b', fontSize: 12 }}>{c.courtName}</td>
-                        <td style={{ padding: '13px' }}><span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(99,102,241,.1)', padding: '3px 10px', borderRadius: 6 }}>{c.caseNumber}</span></td>
-                        <td style={{ padding: '13px', color: '#10b981', fontSize: 12, fontWeight: 700 }}>{c.nextPostingDate}</td>
-                        <td style={{ padding: '13px', color: '#64748b', fontSize: 12 }}>{c.purposeOfPosting}</td>
-                        <td style={{ padding: '13px' }}><button onClick={() => setClients(cl => cl.filter(x => x.slNo !== c.slNo))} style={{ padding: '4px 12px', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 7, color: '#f87171', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>Delete</button></td>
-                      </tr>
-                    ))}
+                    {clients.map(c => {
+                      const docs = clientDocs[c.slNo] || [];
+                      return (
+                        <tr key={c.slNo} style={{ borderBottom: '1px solid rgba(255,255,255,.04)' }}>
+                          <td style={{ padding: '13px', color: '#334155', fontSize: 12, fontWeight: 700 }}>{c.slNo}</td>
+                          <td style={{ padding: '13px' }}><div style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</div></td>
+                          <td style={{ padding: '13px', color: '#64748b', fontSize: 12 }}>{c.phone}</td>
+                          <td style={{ padding: '13px', color: '#64748b', fontSize: 12 }}>{c.courtName}</td>
+                          <td style={{ padding: '13px' }}><span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(99,102,241,.1)', padding: '3px 10px', borderRadius: 6 }}>{c.caseNumber}</span></td>
+                          <td style={{ padding: '13px', color: '#10b981', fontSize: 12, fontWeight: 700 }}>{c.nextPostingDate}</td>
+                          <td style={{ padding: '13px', color: '#64748b', fontSize: 12 }}>{c.purposeOfPosting}</td>
+                          <td style={{ padding: '13px' }}>
+                            <button onClick={() => setClientDocsModal(c)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', background: docs.length > 0 ? 'rgba(245,158,11,.1)' : 'rgba(255,255,255,.04)', border: `1px solid ${docs.length > 0 ? 'rgba(245,158,11,.3)' : 'rgba(255,255,255,.08)'}`, borderRadius: 8, color: docs.length > 0 ? '#f59e0b' : '#475569', fontSize: 10, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .2s' }}>
+                              <Icon path="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" size={12} strokeWidth={2} />
+                              {docs.length > 0 ? `${docs.length} file${docs.length > 1 ? 's' : ''}` : 'Upload'}
+                            </button>
+                          </td>
+                          <td style={{ padding: '13px' }}><button onClick={() => setClients(cl => cl.filter(x => x.slNo !== c.slNo))} style={{ padding: '4px 12px', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 7, color: '#f87171', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>Delete</button></td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
           )}
 
-          {/* KNOWLEDGE BASE */}
+          {/* ── CLIENT DOCUMENTS MODAL ── */}
+          {clientDocsModal && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 300, background: '#020617', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} className="fade-up">
+
+              {/* Header */}
+              <div style={{ background: '#070b14', borderBottom: '1px solid rgba(255,255,255,.06)', padding: '16px 24px', display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+                <button onClick={() => setClientDocsModal(null)}
+                  style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', color: '#94a3b8', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>←</button>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: '#f59e0b', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase' }}>Client Documents</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, letterSpacing: '-0.02em', marginTop: 2 }}>
+                    {clientDocsModal.name}
+                    <span style={{ fontSize: 12, color: '#475569', fontWeight: 600, marginLeft: 10 }}>{clientDocsModal.caseNumber}</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: '#334155', fontWeight: 700 }}>
+                  {(clientDocs[clientDocsModal.slNo] || []).length} file{(clientDocs[clientDocsModal.slNo] || []).length !== 1 ? 's' : ''} stored
+                </div>
+              </div>
+
+              <div style={{ flex: 1, display: 'flex', gap: 0, overflow: 'hidden' }}>
+
+                {/* LEFT — Upload Panel */}
+                <div style={{ width: 360, flexShrink: 0, borderRight: '1px solid rgba(255,255,255,.05)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+                  {/* Mode tabs */}
+                  <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,.05)', flexShrink: 0 }}>
+                    {[['file', '📂 Upload File'], ['camera', '📷 Camera']].map(([mode, label]) => (
+                      <button key={mode} onClick={() => { setDocsUploadMode(mode); if (mode !== 'camera') docsCamStop(); }}
+                        style={{ flex: 1, padding: '13px 0', background: 'none', border: 'none', borderBottom: docsUploadMode === mode ? '2px solid #f59e0b' : '2px solid transparent', color: docsUploadMode === mode ? '#f59e0b' : '#475569', fontSize: 11, fontWeight: 900, letterSpacing: '0.1em', cursor: 'pointer', transition: 'all .2s' }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{ flex: 1, padding: 20, overflowY: 'auto' }}>
+
+                    {/* FILE UPLOAD MODE */}
+                    {docsUploadMode === 'file' && (
+                      <div>
+                        <div
+                          className={`kb-drop${docsDragOver ? ' over' : ''}`}
+                          onDragOver={e => { e.preventDefault(); setDocsDragOver(true); }}
+                          onDragLeave={() => setDocsDragOver(false)}
+                          onDrop={e => { e.preventDefault(); setDocsDragOver(false); docsHandleFiles(e.dataTransfer.files); }}
+                          onClick={() => docsFileInputRef.current?.click()}
+                          style={{ padding: '36px 20px', textAlign: 'center', cursor: 'pointer', marginBottom: 16 }}>
+                          <input ref={docsFileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.heic" style={{ display: 'none' }} onChange={e => docsHandleFiles(e.target.files)} />
+                          <div style={{ fontSize: 36, marginBottom: 10 }}>📁</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>Drag & drop files here</div>
+                          <div style={{ fontSize: 11, color: '#475569', marginBottom: 12 }}>or click to browse your device</div>
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
+                            {['PDF', 'DOC', 'DOCX', 'JPG', 'PNG', 'TXT'].map(ext => (
+                              <span key={ext} style={{ fontSize: 9, fontWeight: 900, color: '#334155', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 6, padding: '2px 7px' }}>{ext}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <button onClick={() => docsFileInputRef.current?.click()}
+                          style={{ width: '100%', padding: '11px 0', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.25)', borderRadius: 12, color: '#f59e0b', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
+                          + Browse & Upload
+                        </button>
+                      </div>
+                    )}
+
+                    {/* CAMERA MODE */}
+                    {docsUploadMode === 'camera' && (
+                      <div>
+                        <div style={{ borderRadius: 16, overflow: 'hidden', background: '#000', aspectRatio: '4/3', marginBottom: 14, position: 'relative', border: '1px solid rgba(255,255,255,.08)' }}>
+                          <video ref={docsCamVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', display: docsCamPhase === 'live' ? 'block' : 'none' }} />
+                          <canvas ref={docsCamCanvasRef} style={{ display: 'none' }} />
+                          {docsCamPhase === 'idle' && (
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                              <div style={{ fontSize: 40 }}>📷</div>
+                              <div style={{ fontSize: 12, color: '#475569', fontWeight: 700 }}>Camera is off</div>
+                            </div>
+                          )}
+                          {docsCamPhase === 'starting' && (
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <div className="spin" style={{ width: 28, height: 28, borderRadius: '50%', border: '3px solid rgba(255,255,255,.1)', borderTopColor: '#f59e0b' }} />
+                            </div>
+                          )}
+                          {docsCamPhase === 'capturing' && (
+                            <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <div style={{ fontSize: 11, color: '#fff', fontWeight: 900 }}>Capturing…</div>
+                            </div>
+                          )}
+                          {docsCamPhase === 'done' && (
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'rgba(16,185,129,.08)' }}>
+                              <div style={{ fontSize: 32 }}>✅</div>
+                              <div style={{ fontSize: 12, color: '#10b981', fontWeight: 900 }}>Photo saved!</div>
+                            </div>
+                          )}
+                          {docsCamPhase === 'error' && (
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16 }}>
+                              <div style={{ fontSize: 26 }}>⚠️</div>
+                              <div style={{ fontSize: 11, color: '#f87171', textAlign: 'center' }}>{docsCamError}</div>
+                            </div>
+                          )}
+                          {/* Live viewfinder overlay */}
+                          {docsCamPhase === 'live' && (
+                            <div style={{ position: 'absolute', inset: 10, border: '1px solid rgba(245,158,11,.4)', borderRadius: 8, pointerEvents: 'none' }}>
+                              <div style={{ position: 'absolute', top: -1, left: -1, width: 20, height: 20, borderTop: '2px solid #f59e0b', borderLeft: '2px solid #f59e0b', borderRadius: '4px 0 0 0' }} />
+                              <div style={{ position: 'absolute', top: -1, right: -1, width: 20, height: 20, borderTop: '2px solid #f59e0b', borderRight: '2px solid #f59e0b', borderRadius: '0 4px 0 0' }} />
+                              <div style={{ position: 'absolute', bottom: -1, left: -1, width: 20, height: 20, borderBottom: '2px solid #f59e0b', borderLeft: '2px solid #f59e0b', borderRadius: '0 0 0 4px' }} />
+                              <div style={{ position: 'absolute', bottom: -1, right: -1, width: 20, height: 20, borderBottom: '2px solid #f59e0b', borderRight: '2px solid #f59e0b', borderRadius: '0 0 4px 0' }} />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Camera controls */}
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          {docsCamPhase === 'idle' || docsCamPhase === 'error' ? (
+                            <button onClick={docsCamStart} style={{ flex: 1, padding: '11px 0', background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 12, color: '#f59e0b', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>📷 Start Camera</button>
+                          ) : docsCamPhase === 'live' ? (
+                            <>
+                              <button onClick={docsCamCapture} style={{ flex: 2, padding: '11px 0', background: '#f59e0b', border: 'none', borderRadius: 12, color: '#000', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>⚡ Capture Photo</button>
+                              <button onClick={docsCamStop} style={{ flex: 1, padding: '11px 0', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 12, color: '#f87171', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Stop</button>
+                            </>
+                          ) : docsCamPhase === 'done' ? (
+                            <button onClick={() => { setDocsCamPhase('idle'); docsCamStart(); }} style={{ flex: 1, padding: '11px 0', background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 12, color: '#f59e0b', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>📷 Take Another</button>
+                          ) : null}
+                        </div>
+                        <div style={{ marginTop: 10, fontSize: 10, color: '#334155', textAlign: 'center' }}>Point camera at the document and tap Capture</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* RIGHT — Uploaded Files List */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                    <div style={{ fontSize: 9, fontWeight: 900, color: '#f59e0b', letterSpacing: '0.2em', textTransform: 'uppercase' }}>Uploaded Documents</div>
+                    <div style={{ fontSize: 10, color: '#334155', fontWeight: 700 }}>{(clientDocs[clientDocsModal.slNo] || []).length} file{(clientDocs[clientDocsModal.slNo] || []).length !== 1 ? 's' : ''}</div>
+                  </div>
+
+                  <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+                    {(clientDocs[clientDocsModal.slNo] || []).length === 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, opacity: .4 }}>
+                        <div style={{ fontSize: 48 }}>📂</div>
+                        <div style={{ fontSize: 13, color: '#475569', fontWeight: 700, textAlign: 'center' }}>No documents yet<br/><span style={{ fontSize: 11, fontWeight: 400 }}>Upload files or take photos using the panel on the left</span></div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 14 }}>
+                        {(clientDocs[clientDocsModal.slNo] || []).map(doc => {
+                          const isImage = doc.type?.startsWith('image/');
+                          const isPdf = doc.name?.toLowerCase().endsWith('.pdf');
+                          const icon = isPdf ? '📄' : isImage ? '🖼' : doc.name?.endsWith('.doc') || doc.name?.endsWith('.docx') ? '📝' : '📎';
+                          return (
+                            <div key={doc.id} style={{ background: '#0a0f1d', borderRadius: 16, border: '1px solid rgba(255,255,255,.06)', overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: 'all .2s' }}
+                              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(245,158,11,.25)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+                              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,.06)'; e.currentTarget.style.transform = 'none'; }}>
+
+                              {/* Preview area */}
+                              <div style={{ height: 120, background: '#070b14', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+                                {isImage && doc.dataUrl ? (
+                                  <img src={doc.dataUrl} alt={doc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                ) : (
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ fontSize: 36 }}>{icon}</span>
+                                    <span style={{ fontSize: 9, color: '#334155', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{doc.name?.split('.').pop()}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* File info */}
+                              <div style={{ padding: '10px 12px', flex: 1 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 4 }} title={doc.name}>{doc.name}</div>
+                                <div style={{ fontSize: 9, color: '#334155', fontWeight: 700 }}>{doc.size} · {doc.uploadedAt}</div>
+                              </div>
+
+                              {/* Actions */}
+                              <div style={{ padding: '8px 12px', borderTop: '1px solid rgba(255,255,255,.04)', display: 'flex', gap: 6 }}>
+                                {doc.dataUrl && (
+                                  <a href={doc.dataUrl} download={doc.name}
+                                    style={{ flex: 1, padding: '5px 0', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 7, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer', textAlign: 'center', textDecoration: 'none', display: 'block' }}>
+                                    ⬇ Download
+                                  </a>
+                                )}
+                                <button onClick={() => setDocsDeleteTarget({ clientSlNo: clientDocsModal.slNo, docId: doc.id, docName: doc.name })}
+                                  style={{ flex: 1, padding: '5px 0', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 7, color: '#f87171', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>
+                                  🗑 Delete
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Doc Delete Confirm ── */}
+              {docsDeleteTarget && (
+                <div style={{ position: 'absolute', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(2,6,23,.88)', backdropFilter: 'blur(8px)' }}>
+                  <div className="fade-up" style={{ background: '#0d1220', border: '1px solid rgba(239,68,68,.3)', borderRadius: 20, padding: '28px 28px 24px', maxWidth: 340, width: '90%', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,.8)' }}>
+                    <div style={{ width: 50, height: 50, borderRadius: '50%', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', fontSize: 22 }}>🗑</div>
+                    <div style={{ fontSize: 16, fontWeight: 900, color: '#f1f5f9', marginBottom: 8 }}>Delete Document?</div>
+                    <div style={{ fontSize: 12, color: '#64748b', background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 10, padding: '8px 12px', marginBottom: 10, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsDeleteTarget.docName}</div>
+                    <p style={{ fontSize: 11, color: '#475569', lineHeight: 1.6, margin: '0 0 20px', padding: '8px 12px', background: 'rgba(239,68,68,.05)', border: '1px solid rgba(239,68,68,.1)', borderRadius: 10 }}>
+                      ⚠ This will <strong style={{ color: '#f87171' }}>permanently delete</strong> this file. This cannot be undone.
+                    </p>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button onClick={() => setDocsDeleteTarget(null)}
+                        style={{ flex: 1, padding: '11px 0', background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 12, color: '#94a3b8', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                      <button onClick={docsDeleteConfirmed}
+                        style={{ flex: 1, padding: '11px 0', background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.35)', borderRadius: 12, color: '#f87171', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
+                        🗑 Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {view === 'knowledge-base' && (
             <div style={{ height: '100%', overflowY: 'auto', padding: 28 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
