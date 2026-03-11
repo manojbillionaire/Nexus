@@ -84,6 +84,9 @@ export default function AdvocatePortal() {
   const [consoleInput, setConsoleInput] = useState("");
   const [consoleLoading, setConsoleLoading] = useState(false);
   const [supportLoading, setSupportLoading] = useState(false);
+  // ── Delete consultation confirm modal ──
+  const [showDeleteConsultModal, setShowDeleteConsultModal] = useState(false);
+  const [deleteTargetMsg, setDeleteTargetMsg] = useState(null); // null = delete all, or a msg object
 
   const tabBarRef = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -1640,7 +1643,7 @@ export default function AdvocatePortal() {
                           </div>
                         )}
                         {chatHistory.length > 0 && (
-                          <button onClick={() => { if (window.confirm('Clear all consultation messages?')) setChatHistory([]); }}
+                          <button onClick={() => { setDeleteTargetMsg(null); setShowDeleteConsultModal(true); }}
                             title="Clear chat"
                             style={{ padding: '5px 11px', background: 'rgba(239,68,68,.07)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 20, color: '#f87171', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>
                             🗑 Clear
@@ -1648,6 +1651,67 @@ export default function AdvocatePortal() {
                         )}
                       </div>
                     </div>
+
+                    {/* ── Delete Consultation Confirm Modal ── */}
+                    {showDeleteConsultModal && (
+                      <div className="fade-up" style={{ position: 'absolute', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(2,6,23,.85)', backdropFilter: 'blur(6px)', borderRadius: 24 }}>
+                        <div style={{ background: '#0d1220', border: '1px solid rgba(239,68,68,.3)', borderRadius: 20, padding: '28px 28px 24px', maxWidth: 360, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,.8), 0 0 0 1px rgba(239,68,68,.1)', textAlign: 'center' }}>
+                          {/* Warning icon */}
+                          <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                          </div>
+                          {/* Title */}
+                          <div style={{ fontSize: 16, fontWeight: 900, color: '#f1f5f9', marginBottom: 8, letterSpacing: '-0.02em' }}>
+                            {deleteTargetMsg ? 'Delete this message?' : 'Delete Consultation?'}
+                          </div>
+                          {/* Warning text */}
+                          {deleteTargetMsg ? (
+                            <>
+                              <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.6, margin: '0 0 10px', padding: '10px 14px', background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 10, textAlign: 'left', fontStyle: 'italic', maxHeight: 72, overflowY: 'auto' }}>
+                                "{deleteTargetMsg.text.slice(0, 120)}{deleteTargetMsg.text.length > 120 ? '…' : ''}"
+                              </div>
+                              <p style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.7, margin: '0 0 6px' }}>
+                                This will <strong style={{ color: '#f87171' }}>permanently delete</strong> this {deleteTargetMsg.role === 'user' ? 'message' : 'AI response'}.
+                              </p>
+                            </>
+                          ) : (
+                            <p style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.7, margin: '0 0 6px' }}>
+                              This will <strong style={{ color: '#f87171' }}>permanently delete</strong> all {chatHistory.length} message{chatHistory.length !== 1 ? 's' : ''} in this consultation.
+                            </p>
+                          )}
+                          <p style={{ fontSize: 11, color: '#475569', lineHeight: 1.6, margin: '0 0 22px', padding: '8px 12px', background: 'rgba(239,68,68,.05)', border: '1px solid rgba(239,68,68,.1)', borderRadius: 10 }}>
+                            ⚠ This action cannot be undone. If you haven't saved to Google Drive, this data will be lost forever.
+                          </p>
+                          {/* Action buttons */}
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <button
+                              onClick={() => { setShowDeleteConsultModal(false); setDeleteTargetMsg(null); }}
+                              style={{ flex: 1, padding: '11px 0', background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 12, color: '#94a3b8', fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all .15s' }}
+                              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.08)'; e.currentTarget.style.color = '#e2e8f0'; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.05)'; e.currentTarget.style.color = '#94a3b8'; }}>
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (deleteTargetMsg) {
+                                  setChatHistory(h => h.filter(m => m.id !== deleteTargetMsg.id));
+                                } else {
+                                  setChatHistory([]);
+                                }
+                                setShowDeleteConsultModal(false);
+                                setDeleteTargetMsg(null);
+                              }}
+                              style={{ flex: 1, padding: '11px 0', background: 'rgba(239,68,68,.15)', border: '1px solid rgba(239,68,68,.35)', borderRadius: 12, color: '#f87171', fontSize: 12, fontWeight: 900, cursor: 'pointer', transition: 'all .15s' }}
+                              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,.25)'; e.currentTarget.style.color = '#fca5a5'; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(239,68,68,.15)'; e.currentTarget.style.color = '#f87171'; }}>
+                              🗑 Delete Permanently
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Context pill — shows when a call record is active */}
                     {activeCallRecord && (
@@ -1685,10 +1749,30 @@ export default function AdvocatePortal() {
                         </div>
                       )}
                       {chatHistory.map(msg => (
-                        <div key={msg.id} className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                        <div key={msg.id} className="fade-up"
+                          style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', alignItems: 'flex-start', gap: 6, position: 'relative' }}
+                          onMouseEnter={e => { const btn = e.currentTarget.querySelector('.msg-del-btn'); if (btn) btn.style.opacity = '1'; }}
+                          onMouseLeave={e => { const btn = e.currentTarget.querySelector('.msg-del-btn'); if (btn) btn.style.opacity = '0'; }}>
+                          {/* Delete button — left of AI bubble, right of user bubble */}
+                          {msg.role === 'ai' && (
+                            <button className="msg-del-btn"
+                              onClick={() => { setDeleteTargetMsg(msg); setShowDeleteConsultModal(true); }}
+                              title="Delete this message"
+                              style={{ opacity: 0, transition: 'opacity .15s', flexShrink: 0, marginTop: 6, width: 22, height: 22, borderRadius: '50%', background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.25)', color: '#f87171', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', order: -1 }}>
+                              ✕
+                            </button>
+                          )}
                           <div style={{ maxWidth: '82%', padding: '13px 17px', borderRadius: msg.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.3)' : 'rgba(255,255,255,.07)'}`, fontSize: 13, lineHeight: 1.7, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}
                             dangerouslySetInnerHTML={msg.role === 'ai' ? { __html: renderMarkdown(msg.text) } : undefined}
                           >{msg.role === 'user' ? msg.text : undefined}</div>
+                          {msg.role === 'user' && (
+                            <button className="msg-del-btn"
+                              onClick={() => { setDeleteTargetMsg(msg); setShowDeleteConsultModal(true); }}
+                              title="Delete this message"
+                              style={{ opacity: 0, transition: 'opacity .15s', flexShrink: 0, marginTop: 6, width: 22, height: 22, borderRadius: '50%', background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.25)', color: '#f87171', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              ✕
+                            </button>
+                          )}
                         </div>
                       ))}
                       {consoleLoading && <div style={{ display: 'flex', gap: 6, padding: '13px 17px', width: 'fit-content', background: 'rgba(255,255,255,.04)', borderRadius: '20px 20px 20px 4px' }}>
