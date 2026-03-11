@@ -201,10 +201,19 @@ async function callSarvam(text, targetLang = 'hi-IN', action = 'translate') {
       }, { headers: { 'api-subscription-key': process.env.SARVAM_API_KEY }, timeout: 10000 });
       return { success: true, translated: res.data.translated_text };
     } else if (action === 'tts') {
+      // Voice mapping per language (Bulbul v3)
+      const voiceMap = {
+        'hi-IN': 'anushka', 'bn-IN': 'riya', 'pa-IN': 'pavithra',
+        'mr-IN': 'anushka', 'ta-IN': 'anushka', 'te-IN': 'anushka',
+        'kn-IN': 'anushka', 'ml-IN': 'anushka', 'gu-IN': 'anushka',
+        'od-IN': 'anushka', 'as-IN': 'anushka', 'ur-IN': 'anushka',
+        'sa-IN': 'anushka', 'en-IN': 'anushka',
+      };
+      const speaker = voiceMap[targetLang] || 'anushka';
       const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
         inputs: [text], target_language_code: targetLang,
-        speaker: 'meera', pitch: 0, pace: 1.0, loudness: 1.5,
-        speech_sample_rate: 8000, enable_preprocessing: true, model: 'bulbul:v1',
+        speaker, pitch: 0, pace: 1.0, loudness: 1.5,
+        speech_sample_rate: 22050, enable_preprocessing: true, model: 'bulbul:v3',
       }, { headers: { 'api-subscription-key': process.env.SARVAM_API_KEY }, timeout: 15000 });
       return { success: true, audio: res.data.audios[0] };
     }
@@ -505,6 +514,62 @@ app.post('/api/sarvam/tts', authMiddleware, async (req, res) => {
   const result = await callSarvam(text, lang, 'tts');
   if (!result.success) return res.json({ ok: false, error: result.error });
   res.json({ ok: true, audio: result.audio });
+});
+
+// ─── Sarvam STT: Speech-to-Text (Saarika v2) ─────────────────────────────────
+app.post('/api/sarvam/stt', authMiddleware, async (req, res) => {
+  const { audioBase64, lang = 'auto' } = req.body;
+  const sarvamKey = (process.env.SARVAM_API_KEY || '').replace(/\s/g, '');
+  if (!sarvamKey) return res.json({ ok: false, error: 'No Sarvam API key configured' });
+  if (!audioBase64) return res.status(400).json({ ok: false, error: 'audioBase64 required' });
+  try {
+    const FormData = require('form-data');
+    const formData = new FormData();
+    const audioBuffer = Buffer.from(audioBase64, 'base64');
+    formData.append('file', audioBuffer, { filename: 'audio.wav', contentType: 'audio/wav' });
+    formData.append('model', 'saarika:v2');
+    if (lang && lang !== 'auto') formData.append('language_code', lang);
+    const response = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
+      headers: { ...formData.getHeaders(), 'api-subscription-key': sarvamKey },
+      timeout: 20000,
+    });
+    const transcript = response.data.transcript || '';
+    const detectedLang = response.data.language_code || lang;
+    res.json({ ok: true, transcript, detectedLang });
+  } catch (e) {
+    console.error('Sarvam STT error:', e.response?.data || e.message);
+    res.json({ ok: false, error: e.response?.data?.message || e.message });
+  }
+});
+
+// ─── Sarvam Vision: OCR / Document Intelligence ───────────────────────────────
+app.post('/api/sarvam/ocr', authMiddleware, async (req, res) => {
+  const { imageBase64, mimeType = 'image/jpeg' } = req.body;
+  const sarvamKey = (process.env.SARVAM_API_KEY || '').replace(/\s/g, '');
+  if (!sarvamKey) return res.json({ ok: false, error: 'No Sarvam API key configured' });
+  if (!imageBase64) return res.status(400).json({ ok: false, error: 'imageBase64 required' });
+  try {
+    const response = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
+      model: 'sarvam-vision',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+          { type: 'text', text: 'Extract all text from this document image accurately. Preserve the original formatting, line breaks, and structure. Include all text visible including headers, body text, and any handwritten notes. Return only the extracted text.' }
+        ]
+      }],
+      max_tokens: 2000,
+    }, {
+      headers: { 'api-subscription-key': sarvamKey, 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+    const raw = response.data.choices?.[0]?.message?.content || '';
+    const extractedText = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    res.json({ ok: true, text: extractedText });
+  } catch (e) {
+    console.error('Sarvam OCR error:', e.response?.data || e.message);
+    res.json({ ok: false, error: e.response?.data?.message || e.message });
+  }
 });
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
