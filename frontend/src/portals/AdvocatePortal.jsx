@@ -56,6 +56,11 @@ export default function AdvocatePortal() {
   // ── Voice History Records (in-session only — advocate saves to Google Drive manually) ──
   const [voiceRecords, setVoiceRecords] = useState(VOICE_RECORDS);
   const [activeCallRecord, setActiveCallRecord] = useState(null); // the call record pinned in Consult
+  // ── Google Drive integration ──
+  const [gdrive, setGdrive] = useState({ connected: false, folderId: null, advocateId: null, folderName: null, subfolders: null, loading: true, saving: false, files: [], filesLoading: false });
+  const [gdriveSaveStatus, setGdriveSaveStatus] = useState(null); // null | 'saving' | 'saved' | 'error'
+  const [gdriveAutoSaveLog, setGdriveAutoSaveLog] = useState([]); // [{type, filename, ts}]
+  const gdriveAutoSaveRef = useRef({ lastConsultLen: 0, lastVoiceCount: 0 });
   // ── Nexus Voice AI (dock) ──
   const [voiceAiOn, setVoiceAiOn] = useState(false);
   const [voiceAiListening, setVoiceAiListening] = useState(false);
@@ -837,11 +842,13 @@ export default function AdvocatePortal() {
     setConsoleLoading(true);
     try {
       const history = chatHistory.map(m => ({ role: m.role, text: m.text }));
-      // Prepend active call record as context if present and not already in history
-      const contextPrefix = activeCallRecord && history.length === 0
-        ? `[CALL CONTEXT — Client: ${activeCallRecord.client}, Date: ${activeCallRecord.date}, Duration: ${activeCallRecord.duration}, Summary: ${activeCallRecord.summary}]\n\n`
-        : '';
-      const res = await api.post('/api/ai/consult', { message: contextPrefix + text, history });
+      const res = await api.post('/api/ai/consult', {
+        message: text,
+        history,
+        callContext: activeCallRecord || null,
+        tempInstructions: tempInstructions,
+        language: 'en',
+      });
       setChatHistory(h => [...h, { role: 'ai', text: res.data.reply, id: Date.now() }]);
     } catch (e) {
       const errMsg = e.response?.data?.error || 'AI service unavailable. Please check your API keys in Railway environment variables.';
@@ -849,6 +856,168 @@ export default function AdvocatePortal() {
     }
     setConsoleLoading(false);
   };
+
+  // ── Google Drive helpers ──
+  const gdriveCheckStatus = async () => {
+    try {
+      const res = await api.get('/api/gdrive/status');
+      // Backend returns: { connected, folderId, advocateId, folderName, subfolders: { consultations, voiceRecords, drafts, clients } }
+      setGdrive(g => ({
+        ...g,
+        connected: res.data.connected,
+        folderId: res.data.folderId,
+        advocateId: res.data.advocateId || null,
+        folderName: res.data.folderName || null,
+        subfolders: res.data.subfolders || null,
+        loading: false,
+      }));
+    } catch { setGdrive(g => ({ ...g, loading: false })); }
+  };
+
+  const gdriveConnect = () => {
+    api.get('/api/gdrive/auth-url').then(res => {
+      const popup = window.open(res.data.url, 'gdrive_auth', 'width=520,height=620,scrollbars=yes');
+      const handler = (e) => {
+        if (e.data?.type === 'gdrive_connected') {
+          // Backend creates Nexus-ADV-{id}/ folder tree automatically on first connect
+          setGdrive(g => ({
+            ...g,
+            connected: true,
+            folderId: e.data.folderId,
+            advocateId: e.data.advocateId || null,
+            folderName: e.data.folderName || null,
+            subfolders: e.data.subfolders || null,
+          }));
+          window.removeEventListener('message', handler);
+          popup?.close();
+        } else if (e.data?.type === 'gdrive_error') {
+          window.removeEventListener('message', handler);
+          popup?.close();
+        }
+      };
+      window.addEventListener('message', handler);
+    }).catch(() => {});
+  };
+
+  const gdriveDisconnect = async () => {
+    if (!window.confirm('Disconnect Google Drive? Your existing Drive files will remain.')) return;
+    await api.post('/api/gdrive/disconnect');
+    setGdrive({ connected: false, folderId: null, loading: false, saving: false, files: [], filesLoading: false });
+  };
+
+  const gdriveSave = async (type, data, filename, { silent = false } = {}) => {
+    if (!gdrive.connected) return false;
+    if (!silent) setGdriveSaveStatus('saving');
+    try {
+      // Pass subfolderId so backend writes into the correct subfolder (Consultations/, Voice Records/, etc.)
+      const subfolderId = gdrive.subfolders?.[type] || null;
+      await api.post('/api/gdrive/save', { type, data, filename, subfolderId });
+      if (!silent) {
+        setGdriveSaveStatus('saved');
+        setTimeout(() => setGdriveSaveStatus(null), 3000);
+      }
+      // Append to auto-save log
+      setGdriveAutoSaveLog(l => [{ type, filename, ts: new Date().toLocaleTimeString() }, ...l].slice(0, 20));
+      return true;
+    } catch {
+      if (!silent) {
+        setGdriveSaveStatus('error');
+        setTimeout(() => setGdriveSaveStatus(null), 3000);
+      }
+      return false;
+    }
+  };
+
+  // ── Subfolder key map for display ──
+  const SUBFOLDER_LABELS = {
+    consultation: { label: 'Consultations', color: '#6366f1', icon: '💬' },
+    call_record:  { label: 'Voice Records', color: '#f59e0b', icon: '🎙' },
+    draft:        { label: 'Drafts',         color: '#10b981', icon: '📄' },
+    client:       { label: 'Client Files',   color: '#8b5cf6', icon: '👤' },
+    temp_instructions: { label: 'Instructions', color: '#94a3b8', icon: '📋' },
+  };
+
+  const gdriveLoadFiles = async () => {
+    if (!gdrive.connected) return;
+    setGdrive(g => ({ ...g, filesLoading: true }));
+    try {
+      const res = await api.get('/api/gdrive/files');
+      setGdrive(g => ({ ...g, files: res.data.files || [], filesLoading: false }));
+    } catch { setGdrive(g => ({ ...g, filesLoading: false })); }
+  };
+
+  const gdriveOpenFolder = async (subfolder) => {
+    try {
+      // If a specific subfolder key is passed, open that subfolder; else open the root Nexus folder
+      const subId = subfolder ? gdrive.subfolders?.[subfolder] : null;
+      if (subId) {
+        window.open(`https://drive.google.com/drive/folders/${subId}`, '_blank');
+        return;
+      }
+      if (gdrive.folderId) {
+        window.open(`https://drive.google.com/drive/folders/${gdrive.folderId}`, '_blank');
+        return;
+      }
+      const res = await api.get('/api/gdrive/folder-url');
+      window.open(res.data.url, '_blank');
+    } catch { window.open('https://drive.google.com', '_blank'); }
+  };
+
+  const gdriveDeleteFile = async (fileId) => {
+    if (!window.confirm('Delete this file from your Google Drive?')) return;
+    try {
+      await api.delete(`/api/gdrive/files/${fileId}`);
+      setGdrive(g => ({ ...g, files: g.files.filter(f => f.id !== fileId) }));
+    } catch {}
+  };
+
+  // Auto-save consultation to Drive when chat has messages
+  const gdriveSaveConsultation = (silent = false) => {
+    if (!gdrive.connected || chatHistory.length === 0) return;
+    const record = activeCallRecord ? `Client: ${activeCallRecord.client}\nDate: ${activeCallRecord.date}\nDuration: ${activeCallRecord.duration}\nSummary: ${activeCallRecord.summary}\n\n` : '';
+    const transcript = chatHistory.map(m => `${m.role === 'user' ? 'Advocate' : 'Nexus AI'} [${new Date().toLocaleTimeString()}]:\n${m.text}`).join('\n\n---\n\n');
+    const ts = new Date().toISOString().slice(0, 10);
+    const clientName = activeCallRecord ? activeCallRecord.client.replace(/\s/g, '_') : 'General';
+    gdriveSave('consultation', `${record}CONSULTATION TRANSCRIPT\nDate: ${ts}\n\n${transcript}`,
+      `consultation_${clientName}_${ts}.txt`, { silent });
+  };
+
+  // ── Auto-save: consultation after every 5 new AI replies ──
+  useEffect(() => {
+    if (!gdrive.connected) return;
+    const aiCount = chatHistory.filter(m => m.role === 'ai').length;
+    const last = gdriveAutoSaveRef.current.lastConsultLen;
+    if (aiCount > 0 && aiCount % 5 === 0 && aiCount !== last) {
+      gdriveAutoSaveRef.current.lastConsultLen = aiCount;
+      gdriveSaveConsultation(true); // silent auto-save
+    }
+  }, [chatHistory, gdrive.connected]);
+
+  // ── Auto-save: new voice record immediately when added ──
+  useEffect(() => {
+    if (!gdrive.connected || voiceRecords.length === 0) return;
+    const prev = gdriveAutoSaveRef.current.lastVoiceCount;
+    if (voiceRecords.length > prev) {
+      gdriveAutoSaveRef.current.lastVoiceCount = voiceRecords.length;
+      const latest = voiceRecords[0];
+      if (latest) {
+        const content = `VOICE RECORD\nClient: ${latest.client}\nDate: ${latest.date}\nDuration: ${latest.duration}\n\nSummary:\n${latest.summary}`;
+        gdriveSave('call_record', content,
+          `voice_${latest.client.replace(/\s/g,'_')}_${latest.date.replace(/\//g,'-')}.txt`, { silent: true });
+      }
+    }
+  }, [voiceRecords, gdrive.connected]);
+
+  // ── Manual save draft to Drive ──
+  const gdriveSaveDraft = () => {
+    if (!gdrive.connected || draftPages.length === 0) return;
+    const ts = new Date().toISOString().slice(0, 10);
+    const content = draftPages.map((pg, i) => `=== PAGE ${i + 1} ===\n\n${pg}`).join('\n\n');
+    gdriveSave('draft', content, `draft_${ts}_${draftPages.length}pages.txt`);
+  };
+
+  // Load Drive status on mount
+  useEffect(() => { gdriveCheckStatus(); }, []);
 
   const sendSupport = async () => {
     if (!supportInput.trim() || supportLoading) return;
@@ -1312,17 +1481,142 @@ export default function AdvocatePortal() {
                     </div>
                   )}
 
-                  {/* Google Drive save reminder */}
-                  <div style={{ background: 'rgba(16,185,129,.03)', border: '1px solid rgba(16,185,129,.1)', borderRadius: 14, padding: '12px 14px', flexShrink: 0 }}>
-                    <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 6 }}>📁 Google Drive</div>
-                    <p style={{ fontSize: 11, color: '#334155', lineHeight: 1.6, margin: '0 0 10px' }}>
-                      Nexus does not store your data. All call records exist only in this session. Save important records to your Google Drive.
-                    </p>
-                    <button
-                      onClick={() => window.open('https://drive.google.com', '_blank')}
-                      style={{ width: '100%', padding: '8px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 9, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
-                      Open Google Drive →
-                    </button>
+                  {/* Google Drive Panel */}
+                  <div style={{ background: gdrive.connected ? 'rgba(16,185,129,.04)' : 'rgba(255,255,255,.02)', border: `1px solid ${gdrive.connected ? 'rgba(16,185,129,.2)' : 'rgba(255,255,255,.07)'}`, borderRadius: 16, padding: '14px 16px', flexShrink: 0, transition: 'all .3s' }}>
+
+                    {/* Header row */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 8, background: gdrive.connected ? 'rgba(16,185,129,.15)' : 'rgba(255,255,255,.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>
+                        {gdrive.loading ? <div className="spin" style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(255,255,255,.1)', borderTopColor: '#10b981' }} /> : '📁'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 9, fontWeight: 900, color: gdrive.connected ? '#10b981' : '#475569', letterSpacing: '0.2em', textTransform: 'uppercase' }}>
+                          {gdrive.connected ? '● Google Drive Connected' : 'Google Drive'}
+                        </div>
+                        {gdrive.connected && (
+                          <div style={{ fontSize: 9, color: '#475569', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {gdrive.folderName
+                              ? <span style={{ color: '#10b981', fontWeight: 700 }}>{gdrive.folderName}</span>
+                              : gdrive.advocateId
+                                ? <span style={{ color: '#10b981', fontWeight: 700 }}>Nexus-{gdrive.advocateId}</span>
+                                : gdrive.folderId
+                                  ? <span style={{ color: '#10b981', fontWeight: 700 }}>Nexus-ADV-{gdrive.folderId.slice(-8).toUpperCase()}</span>
+                                  : null}
+                          </div>
+                        )}
+                      </div>
+                      {gdrive.connected && (
+                        <div style={{ display: 'flex', gap: 5 }}>
+                          <button onClick={gdriveLoadFiles} title="Refresh files" style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', color: '#475569', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>↺</button>
+                          <button onClick={() => gdriveOpenFolder()} title="Open Nexus folder in Drive" style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', color: '#10b981', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>↗</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {!gdrive.connected && !gdrive.loading && (
+                      <>
+                        <p style={{ fontSize: 10, color: '#475569', lineHeight: 1.6, margin: '0 0 10px' }}>
+                          Connect your Google Drive. Nexus will create a <strong style={{ color: '#94a3b8' }}>Nexus-ADV-{'{id}'}</strong> folder and auto-save all records there. <strong style={{ color: '#94a3b8' }}>We store nothing</strong> — data lives in your Drive only.
+                        </p>
+                        <button onClick={gdriveConnect}
+                          style={{ width: '100%', padding: '9px 0', background: 'rgba(99,102,241,.12)', border: '1px solid rgba(99,102,241,.3)', borderRadius: 10, color: '#818cf8', fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                          🔗 Connect Google Drive
+                        </button>
+                      </>
+                    )}
+
+                    {gdrive.connected && (
+                      <>
+                        {/* Save status indicator */}
+                        {gdriveSaveStatus && (
+                          <div className="fade-up" style={{ padding: '6px 10px', borderRadius: 8, background: gdriveSaveStatus === 'saved' ? 'rgba(16,185,129,.1)' : gdriveSaveStatus === 'error' ? 'rgba(239,68,68,.1)' : 'rgba(245,158,11,.1)', border: `1px solid ${gdriveSaveStatus === 'saved' ? 'rgba(16,185,129,.2)' : gdriveSaveStatus === 'error' ? 'rgba(239,68,68,.2)' : 'rgba(245,158,11,.2)'}`, marginBottom: 8, fontSize: 10, color: gdriveSaveStatus === 'saved' ? '#10b981' : gdriveSaveStatus === 'error' ? '#f87171' : '#f59e0b', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+                            {gdriveSaveStatus === 'saving' && <div className="spin" style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(255,255,255,.2)', borderTopColor: '#f59e0b' }} />}
+                            {gdriveSaveStatus === 'saved' ? '✓ Saved to Drive' : gdriveSaveStatus === 'error' ? '✕ Save failed' : 'Saving…'}
+                          </div>
+                        )}
+
+                        {/* Subfolder quick-jump row */}
+                        {gdrive.subfolders && (
+                          <div style={{ display: 'flex', gap: 4, marginBottom: 10, flexWrap: 'wrap' }}>
+                            {Object.entries(SUBFOLDER_LABELS).filter(([k]) => k !== 'temp_instructions').map(([key, meta]) => (
+                              <button key={key} onClick={() => gdriveOpenFolder(key)}
+                                title={`Open ${meta.label} folder in Drive`}
+                                style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '3px 8px', background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 20, color: '#475569', fontSize: 8, fontWeight: 700, cursor: 'pointer', transition: 'all .15s' }}
+                                onMouseEnter={e => { e.currentTarget.style.borderColor = meta.color + '66'; e.currentTarget.style.color = meta.color; }}
+                                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,.06)'; e.currentTarget.style.color = '#475569'; }}>
+                                {meta.icon} {meta.label} ↗
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Action buttons */}
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                          {activeCallRecord && (
+                            <button
+                              onClick={() => gdriveSave('call_record',
+                                `VOICE RECORD\nClient: ${activeCallRecord.client}\nDate: ${activeCallRecord.date}\nDuration: ${activeCallRecord.duration}\n\nSummary:\n${activeCallRecord.summary}`,
+                                `call_${(activeCallRecord.client||'unknown').replace(/\s/g,'_')}_${(activeCallRecord.date||'now').replace(/\//g,'-')}.txt`)}
+                              style={{ flex: 1, padding: '7px 8px', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 9, color: '#f59e0b', fontSize: 9, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              💾 Save Call Record
+                            </button>
+                          )}
+                          {chatHistory.length > 0 && (
+                            <button onClick={() => gdriveSaveConsultation(false)}
+                              style={{ flex: 1, padding: '7px 8px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 9, color: '#818cf8', fontSize: 9, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              💾 Save Consultation
+                            </button>
+                          )}
+                          <button
+                            onClick={() => gdriveSave('temp_instructions',
+                              JSON.stringify(tempInstructions.filter(i => i.active), null, 2),
+                              `instructions_${new Date().toISOString().slice(0,10)}.json`)}
+                            style={{ flex: 1, padding: '7px 8px', background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.15)', borderRadius: 9, color: '#10b981', fontSize: 9, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            💾 Save Instructions
+                          </button>
+                        </div>
+
+                        {/* Auto-save log */}
+                        {gdriveAutoSaveLog.length > 0 && (
+                          <div style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: 8, color: '#334155', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 4 }}>Auto-save Log</div>
+                            <div style={{ maxHeight: 64, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              {gdriveAutoSaveLog.slice(0, 5).map((entry, i) => {
+                                const meta = SUBFOLDER_LABELS[entry.type] || { icon: '📁', color: '#475569' };
+                                return (
+                                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 8.5, color: '#334155' }}>
+                                    <span>{meta.icon}</span>
+                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#475569' }}>{entry.filename}</span>
+                                    <span style={{ flexShrink: 0, color: '#1e293b' }}>{entry.ts}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* File list */}
+                        {gdrive.filesLoading ? (
+                          <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+                            <div className="spin" style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid rgba(255,255,255,.1)', borderTopColor: '#10b981' }} />
+                          </div>
+                        ) : gdrive.files.length > 0 ? (
+                          <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+                            <div style={{ fontSize: 8, color: '#334155', fontWeight: 900, letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 5 }}>Drive Files ({gdrive.files.length})</div>
+                            {gdrive.files.map(f => (
+                              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,.03)' }}>
+                                <span style={{ fontSize: 9, color: '#64748b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.name}>{f.name}</span>
+                                <button onClick={() => gdriveDeleteFile(f.id)} style={{ width: 16, height: 16, borderRadius: 4, background: 'rgba(239,68,68,.1)', border: 'none', color: '#f87171', fontSize: 8, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 9, color: '#334155', textAlign: 'center', padding: '4px 0' }}>No files yet — save records above</div>
+                        )}
+
+                        <button onClick={gdriveDisconnect} style={{ width: '100%', marginTop: 8, padding: '5px 0', background: 'transparent', border: '1px solid rgba(255,255,255,.06)', borderRadius: 8, color: '#334155', fontSize: 9, cursor: 'pointer', fontWeight: 700 }}>Disconnect Drive</button>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1339,6 +1633,12 @@ export default function AdvocatePortal() {
                       </div>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <div style={{ padding: '5px 11px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 20, fontSize: 9, color: '#818cf8', fontWeight: 700 }}>IPC · CPC · Evidence Act</div>
+                        {gdrive.connected && (
+                          <div style={{ padding: '5px 10px', background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.15)', borderRadius: 20, fontSize: 9, color: '#10b981', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
+                            Drive RAG Active
+                          </div>
+                        )}
                         {chatHistory.length > 0 && (
                           <button onClick={() => { if (window.confirm('Clear all consultation messages?')) setChatHistory([]); }}
                             title="Clear chat"
@@ -2423,6 +2723,15 @@ export default function AdvocatePortal() {
                   <Icon path={isSpeaking?"M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z":"M15.536 8.464a5 5 0 010 7.072M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13"} size={12} strokeWidth={2}/>
                   {isSpeaking ? 'Stop' : 'Read P.'+(currentPage)}
                 </button>
+                {/* Save draft to Drive */}
+                {gdrive.connected && (
+                  <button onClick={gdriveSaveDraft}
+                    title="Save entire draft to your Google Drive (Drafts folder)"
+                    style={{ display:'flex',alignItems:'center',gap:5,padding:'5px 11px',background:'rgba(16,185,129,.07)',border:'1px solid rgba(16,185,129,.2)',borderRadius:9,color:'#10b981',fontSize:9,fontWeight:900,cursor:'pointer',whiteSpace:'nowrap' }}>
+                    <Icon path="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" size={12} strokeWidth={2}/>
+                    Save to Drive
+                  </button>
+                )}
               </div>
 
               {/* ── Model draft upload panel ── */}
