@@ -53,6 +53,9 @@ export default function AdvocatePortal() {
   const [addingClient, setAddingClient] = useState(false);
   const [newClient, setNewClient] = useState({});
   const [chatHistory, setChatHistory] = useState([]);
+  // ── Voice History Records (in-session only — advocate saves to Google Drive manually) ──
+  const [voiceRecords, setVoiceRecords] = useState(VOICE_RECORDS);
+  const [activeCallRecord, setActiveCallRecord] = useState(null); // the call record pinned in Consult
   // ── Nexus Voice AI (dock) ──
   const [voiceAiOn, setVoiceAiOn] = useState(false);
   const [voiceAiListening, setVoiceAiListening] = useState(false);
@@ -834,7 +837,11 @@ export default function AdvocatePortal() {
     setConsoleLoading(true);
     try {
       const history = chatHistory.map(m => ({ role: m.role, text: m.text }));
-      const res = await api.post('/api/ai/consult', { message: text, history });
+      // Prepend active call record as context if present and not already in history
+      const contextPrefix = activeCallRecord && history.length === 0
+        ? `[CALL CONTEXT — Client: ${activeCallRecord.client}, Date: ${activeCallRecord.date}, Duration: ${activeCallRecord.duration}, Summary: ${activeCallRecord.summary}]\n\n`
+        : '';
+      const res = await api.post('/api/ai/consult', { message: contextPrefix + text, history });
       setChatHistory(h => [...h, { role: 'ai', text: res.data.reply, id: Date.now() }]);
     } catch (e) {
       const errMsg = e.response?.data?.error || 'AI service unavailable. Please check your API keys in Railway environment variables.';
@@ -1034,14 +1041,27 @@ export default function AdvocatePortal() {
                             style={{ padding: '4px 10px', background: 'rgba(239,68,68,.06)', border: '1px solid rgba(239,68,68,.1)', borderRadius: 6, color: '#f87171', fontSize: 9, cursor: 'pointer' }}>✕</button>
                         </div>
                       </div>
-                    )) : VOICE_RECORDS.map(r => (
-                      <div key={r.id} style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '12px 14px', border: '1px solid rgba(255,255,255,.04)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    )) : voiceRecords.map(r => (
+                      <div key={r.id} className="fade-up"
+                        onClick={() => { setActiveCallRecord(r); setView('consult'); }}
+                        style={{ background: activeCallRecord?.id === r.id ? 'rgba(99,102,241,.08)' : 'rgba(255,255,255,.03)', borderRadius: 12, padding: '12px 14px', border: `1px solid ${activeCallRecord?.id === r.id ? 'rgba(99,102,241,.3)' : 'rgba(255,255,255,.04)'}`, cursor: 'pointer', transition: 'all .2s', position: 'relative' }}
+                        onMouseEnter={e => { if (activeCallRecord?.id !== r.id) e.currentTarget.style.borderColor = 'rgba(99,102,241,.2)'; e.currentTarget.style.background = 'rgba(99,102,241,.06)'; }}
+                        onMouseLeave={e => { if (activeCallRecord?.id !== r.id) { e.currentTarget.style.borderColor = 'rgba(255,255,255,.04)'; e.currentTarget.style.background = 'rgba(255,255,255,.03)'; } }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, alignItems: 'flex-start' }}>
                           <span style={{ fontSize: 12, fontWeight: 700 }}>{r.client}</span>
-                          <span style={{ fontSize: 10, color: '#475569' }}>{r.duration}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 10, color: '#475569' }}>{r.duration}</span>
+                            <button
+                              onClick={e => { e.stopPropagation(); if (activeCallRecord?.id === r.id) setActiveCallRecord(null); setVoiceRecords(v => v.filter(x => x.id !== r.id)); }}
+                              title="Delete this record"
+                              style={{ width: 18, height: 18, borderRadius: '50%', background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.2)', color: '#f87171', fontSize: 9, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, flexShrink: 0 }}>✕</button>
+                          </div>
                         </div>
                         <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>{r.summary}</div>
-                        <div style={{ fontSize: 9, color: '#334155', marginTop: 4, fontWeight: 700 }}>{r.date}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                          <span style={{ fontSize: 9, color: '#334155', fontWeight: 700 }}>{r.date}</span>
+                          <span style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.08em' }}>Tap to consult →</span>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1149,16 +1169,17 @@ export default function AdvocatePortal() {
 
           {/* CONSULT */}
           {view === 'consult' && (
-            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: 24, overflow: 'hidden' }}>
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: 24, gap: 12, overflow: 'hidden' }}>
+
+              {/* Top status bars */}
               {activeInstructions.length > 0 && (
-                <div style={{ background: 'rgba(245,158,11,.05)', border: '1px solid rgba(245,158,11,.15)', borderRadius: 12, padding: '10px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <div style={{ background: 'rgba(245,158,11,.05)', border: '1px solid rgba(245,158,11,.15)', borderRadius: 12, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                   <Icon path="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" size={14} strokeWidth={2} />
                   <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600 }}>{activeInstructions.length} temporary instruction{activeInstructions.length > 1 ? 's' : ''} active — AI will follow them automatically.</span>
                 </div>
               )}
-              {/* Camera/Mic status bar — shown when active */}
               {(camOn || voiceAiOn) && (
-                <div className="fade-up" style={{ background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 12, padding: '10px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                <div className="fade-up" style={{ background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 12, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                   {camOn && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#6366f1', animation: 'pulse2 1s infinite' }} />
@@ -1176,49 +1197,209 @@ export default function AdvocatePortal() {
                     </div>
                   )}
                   <div style={{ marginLeft: 'auto', fontSize: 10, color: '#334155', fontWeight: 700 }}>
-                    {camOn && voiceAiOn ? 'Camera & mic active — consultation in progress' : camOn ? 'Camera active — capture document or ask AI about what you see' : 'Voice AI active — speak to ask legal questions'}
+                    {camOn && voiceAiOn ? 'Camera & mic active — consultation in progress' : camOn ? 'Camera active' : 'Voice AI active — speak to ask legal questions'}
                   </div>
                 </div>
               )}
-              <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
-                  <div>
-                    <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Nexus AI Legal Engine</div>
-                    <h3 style={{ fontSize: 26, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', margin: 0 }}>Legal<span style={{ color: '#475569', fontStyle: 'normal' }}> Consultant</span></h3>
-                  </div>
-                  <div style={{ padding: '6px 12px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 20, fontSize: 10, color: '#818cf8', fontWeight: 700 }}>IPC · CPC · Evidence Act</div>
-                </div>
-                <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
-                  {chatHistory.length === 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 20, textAlign: 'center' }}>
-                      <div style={{ width: 72, height: 72, borderRadius: 22, background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }}>
-                        <Icon path="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" size={32} strokeWidth={1.5} />
+
+              {/* Main split layout */}
+              <div style={{ flex: 1, display: 'flex', gap: 16, overflow: 'hidden' }}>
+
+                {/* LEFT PANEL — Call Record / Voice History */}
+                <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}>
+
+                  {/* Active pinned call record */}
+                  {activeCallRecord ? (
+                    <div className="fade-up" style={{ background: '#0a0f1d', borderRadius: 20, border: '1px solid rgba(99,102,241,.3)', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 0 30px rgba(99,102,241,.08)' }}>
+                      {/* Record header */}
+                      <div style={{ padding: '16px 18px 12px', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                          <div style={{ fontSize: 8, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase' }}>Active Call Record</div>
+                          <button
+                            onClick={() => setActiveCallRecord(null)}
+                            title="Close this record"
+                            style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.2)', color: '#f87171', fontSize: 11, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: '-0.02em', marginBottom: 4 }}>{activeCallRecord.client}</div>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                          <span style={{ fontSize: 10, color: '#475569' }}>{activeCallRecord.date}</span>
+                          <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#334155', display: 'inline-block' }} />
+                          <span style={{ fontSize: 10, color: '#475569' }}>{activeCallRecord.duration}</span>
+                        </div>
                       </div>
-                      <div>
-                        <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Ask anything legal</p>
-                        <p style={{ fontSize: 12, color: '#475569', margin: 0 }}>I'll use your knowledge base and active instructions.</p>
+                      {/* Transcript / summary */}
+                      <div style={{ padding: '14px 18px', flex: 1 }}>
+                        <div style={{ fontSize: 8, color: '#475569', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 8 }}>Call Summary</div>
+                        <p style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.75, margin: 0 }}>{activeCallRecord.summary}</p>
                       </div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-                        {['Draft interim injunction', 'Find relevant IPC sections', 'Explain CPC Order XXXIX'].map(s => (
-                          <button key={s} onClick={() => setConsoleInput(s)} style={{ padding: '7px 14px', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 20, color: '#818cf8', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{s}</button>
+                      {/* Action buttons */}
+                      <div style={{ padding: '12px 18px', borderTop: '1px solid rgba(255,255,255,.05)', display: 'flex', gap: 8 }}>
+                        <button
+                          onClick={() => {
+                            const prompt = `I have a call record for client ${activeCallRecord.client} (${activeCallRecord.date}, ${activeCallRecord.duration}).\n\nCall Summary: ${activeCallRecord.summary}\n\nPlease analyse this case and advise on legal strategy, applicable sections of law, and recommended next steps.`;
+                            setConsoleInput(prompt);
+                            setTimeout(() => document.querySelector('[data-consult-input]')?.focus(), 100);
+                          }}
+                          style={{ flex: 1, padding: '9px 0', background: '#6366f1', border: 'none', borderRadius: 10, color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          ⚡ Ask AI about this
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (activeCallRecord.id) {
+                              setVoiceRecords(v => v.filter(x => x.id !== activeCallRecord.id));
+                            } else {
+                              setCalls(p => p.filter(x => x._id !== activeCallRecord._id));
+                            }
+                            setActiveCallRecord(null);
+                          }}
+                          title="Delete this record permanently"
+                          style={{ padding: '9px 14px', background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 10, color: '#f87171', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                          🗑 Delete
+                        </button>
+                      </div>
+                      {/* Google Drive note */}
+                      <div style={{ padding: '8px 18px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 9, color: '#334155' }}>💾</span>
+                        <span style={{ fontSize: 9, color: '#334155', fontWeight: 600, lineHeight: 1.4 }}>Data is not saved by the app. Save to your Google Drive to retain this record.</span>
+                      </div>
+                    </div>
+                  ) : (
+                    /* No record selected — show voice history list */
+                    <div style={{ background: '#0a0f1d', borderRadius: 20, border: '1px solid rgba(255,255,255,.06)', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                      <div style={{ padding: '16px 18px 10px', borderBottom: '1px solid rgba(255,255,255,.05)', flexShrink: 0 }}>
+                        <div style={{ fontSize: 8, color: '#475569', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 2 }}>Voice History</div>
+                        <div style={{ fontSize: 11, color: '#334155' }}>Tap a record to load it here</div>
+                      </div>
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {voiceRecords.length === 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, opacity: .35 }}>
+                            <Icon path="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" size={32} strokeWidth={1.5} />
+                            <p style={{ fontSize: 11, color: '#475569', textAlign: 'center', fontWeight: 700 }}>No call records yet</p>
+                          </div>
+                        )}
+                        {voiceRecords.map(r => (
+                          <div key={r.id} className="fade-up"
+                            onClick={() => setActiveCallRecord(r)}
+                            style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '11px 13px', border: '1px solid rgba(255,255,255,.05)', cursor: 'pointer', transition: 'all .2s' }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,.25)'; e.currentTarget.style.background = 'rgba(99,102,241,.06)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,.05)'; e.currentTarget.style.background = 'rgba(255,255,255,.03)'; }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, alignItems: 'center' }}>
+                              <span style={{ fontSize: 12, fontWeight: 700 }}>{r.client}</span>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                <span style={{ fontSize: 9, color: '#475569' }}>{r.duration}</span>
+                                <button onClick={e => { e.stopPropagation(); setVoiceRecords(v => v.filter(x => x.id !== r.id)); }}
+                                  style={{ width: 16, height: 16, borderRadius: '50%', background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.15)', color: '#f87171', fontSize: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{r.summary}</div>
+                            <div style={{ fontSize: 9, color: '#334155', marginTop: 4, fontWeight: 700 }}>{r.date}</div>
+                          </div>
+                        ))}
+                        {calls.filter(c => c.status === 'ended').map(c => (
+                          <div key={c._id} className="fade-up"
+                            onClick={() => setActiveCallRecord({ ...c, client: c.caller || c.phone, id: null })}
+                            style={{ background: 'rgba(255,255,255,.03)', borderRadius: 12, padding: '11px 13px', border: '1px solid rgba(255,255,255,.05)', cursor: 'pointer', transition: 'all .2s' }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(99,102,241,.25)'; e.currentTarget.style.background = 'rgba(99,102,241,.06)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,.05)'; e.currentTarget.style.background = 'rgba(255,255,255,.03)'; }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                              <span style={{ fontSize: 12, fontWeight: 700 }}>{c.caller || 'Unknown'}</span>
+                              <span style={{ fontSize: 9, color: '#475569' }}>{c.duration || '—'}</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>{c.summary || c.phone}</div>
+                          </div>
                         ))}
                       </div>
                     </div>
                   )}
-                  {chatHistory.map(msg => (
-                    <div key={msg.id} className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                      <div style={{ maxWidth: '78%', padding: '13px 17px', borderRadius: msg.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.3)' : 'rgba(255,255,255,.07)'}`, fontSize: 13, lineHeight: 1.7, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}
-                        dangerouslySetInnerHTML={msg.role === 'ai' ? { __html: renderMarkdown(msg.text) } : undefined}
-                      >{msg.role === 'user' ? msg.text : undefined}</div>
-                    </div>
-                  ))}
-                  {consoleLoading && <div style={{ display: 'flex', gap: 6, padding: '13px 17px', width: 'fit-content', background: 'rgba(255,255,255,.04)', borderRadius: '20px 20px 20px 4px' }}>
-                    {[0, 1, 2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: '#475569', animation: 'pulse2 1.2s infinite', animationDelay: `${i * 0.2}s` }} />)}
-                  </div>}
+
+                  {/* Google Drive save reminder */}
+                  <div style={{ background: 'rgba(16,185,129,.03)', border: '1px solid rgba(16,185,129,.1)', borderRadius: 14, padding: '12px 14px', flexShrink: 0 }}>
+                    <div style={{ fontSize: 9, color: '#10b981', fontWeight: 900, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 6 }}>📁 Google Drive</div>
+                    <p style={{ fontSize: 11, color: '#334155', lineHeight: 1.6, margin: '0 0 10px' }}>
+                      Nexus does not store your data. All call records exist only in this session. Save important records to your Google Drive.
+                    </p>
+                    <button
+                      onClick={() => window.open('https://drive.google.com', '_blank')}
+                      style={{ width: '100%', padding: '8px 0', background: 'rgba(16,185,129,.1)', border: '1px solid rgba(16,185,129,.2)', borderRadius: 9, color: '#10b981', fontSize: 10, fontWeight: 900, cursor: 'pointer' }}>
+                      Open Google Drive →
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <input data-consult-input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder="Ask about case strategy, legal sections, petition drafts…" style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 14, padding: '13px 18px', fontSize: 13 }} />
-                  <button onClick={sendConsult} style={{ padding: '13px 22px', background: '#6366f1', border: 'none', borderRadius: 14, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
+
+                {/* RIGHT PANEL — AI Legal Consultation Chat */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div style={{ ...S.card, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14, flexShrink: 0 }}>
+                      <div>
+                        <div style={{ fontSize: 9, color: '#6366f1', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', marginBottom: 4 }}>Nexus AI Legal Engine</div>
+                        <h3 style={{ fontSize: 22, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.02em', margin: 0 }}>
+                          Legal<span style={{ color: '#475569', fontStyle: 'normal' }}> Consultant</span>
+                          {activeCallRecord && <span style={{ fontSize: 13, color: '#6366f1', fontStyle: 'normal', fontWeight: 700, marginLeft: 10 }}>— {activeCallRecord.client}</span>}
+                        </h3>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <div style={{ padding: '5px 11px', background: 'rgba(99,102,241,.1)', border: '1px solid rgba(99,102,241,.2)', borderRadius: 20, fontSize: 9, color: '#818cf8', fontWeight: 700 }}>IPC · CPC · Evidence Act</div>
+                        {chatHistory.length > 0 && (
+                          <button onClick={() => { if (window.confirm('Clear all consultation messages?')) setChatHistory([]); }}
+                            title="Clear chat"
+                            style={{ padding: '5px 11px', background: 'rgba(239,68,68,.07)', border: '1px solid rgba(239,68,68,.15)', borderRadius: 20, color: '#f87171', fontSize: 9, fontWeight: 900, cursor: 'pointer' }}>
+                            🗑 Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Context pill — shows when a call record is active */}
+                    {activeCallRecord && (
+                      <div className="fade-up" style={{ background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 10, padding: '8px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#6366f1' }} />
+                        <span style={{ fontSize: 11, color: '#818cf8', fontWeight: 600 }}>
+                          Context loaded: <strong>{activeCallRecord.client}</strong> · {activeCallRecord.date} · {activeCallRecord.duration}
+                        </span>
+                        <span style={{ marginLeft: 'auto', fontSize: 10, color: '#334155' }}>AI is aware of this call record</span>
+                      </div>
+                    )}
+
+                    <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
+                      {chatHistory.length === 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 20, textAlign: 'center' }}>
+                          <div style={{ width: 72, height: 72, borderRadius: 22, background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }}>
+                            <Icon path="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" size={32} strokeWidth={1.5} />
+                          </div>
+                          <div>
+                            <p style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
+                              {activeCallRecord ? `Ask AI about ${activeCallRecord.client}'s case` : 'Ask anything legal'}
+                            </p>
+                            <p style={{ fontSize: 12, color: '#475569', margin: 0 }}>
+                              {activeCallRecord ? 'AI has the call context. Ask about strategy, sections, or next steps.' : 'Select a call record on the left, or ask any legal question.'}
+                            </p>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                            {(activeCallRecord
+                              ? [`What law applies to ${activeCallRecord.client}'s case?`, 'Suggest next legal steps', 'Draft a relevant petition']
+                              : ['Draft interim injunction', 'Find relevant IPC sections', 'Explain CPC Order XXXIX']
+                            ).map(s => (
+                              <button key={s} onClick={() => setConsoleInput(s)} style={{ padding: '7px 14px', background: 'rgba(99,102,241,.08)', border: '1px solid rgba(99,102,241,.15)', borderRadius: 20, color: '#818cf8', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{s}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {chatHistory.map(msg => (
+                        <div key={msg.id} className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                          <div style={{ maxWidth: '82%', padding: '13px 17px', borderRadius: msg.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px', background: msg.role === 'user' ? 'rgba(99,102,241,.15)' : 'rgba(255,255,255,.04)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,.3)' : 'rgba(255,255,255,.07)'}`, fontSize: 13, lineHeight: 1.7, color: msg.role === 'user' ? '#c7d2fe' : '#cbd5e1' }}
+                            dangerouslySetInnerHTML={msg.role === 'ai' ? { __html: renderMarkdown(msg.text) } : undefined}
+                          >{msg.role === 'user' ? msg.text : undefined}</div>
+                        </div>
+                      ))}
+                      {consoleLoading && <div style={{ display: 'flex', gap: 6, padding: '13px 17px', width: 'fit-content', background: 'rgba(255,255,255,.04)', borderRadius: '20px 20px 20px 4px' }}>
+                        {[0, 1, 2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: '#475569', animation: 'pulse2 1.2s infinite', animationDelay: `${i * 0.2}s` }} />)}
+                      </div>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                      <input data-consult-input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendConsult(); }} placeholder={activeCallRecord ? `Ask about ${activeCallRecord.client}'s case, legal sections, strategy…` : 'Ask about case strategy, legal sections, petition drafts…'} style={{ flex: 1, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 14, padding: '13px 18px', fontSize: 13 }} />
+                      <button onClick={sendConsult} style={{ padding: '13px 22px', background: '#6366f1', border: 'none', borderRadius: 14, color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>Send</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
